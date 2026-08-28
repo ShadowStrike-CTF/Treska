@@ -1,0 +1,30 @@
+# © 2026 Strategos Pty Ltd. All rights reserved.
+# Aut Viam Inveniam Aut Faciam
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "treska"
+version = "0.0.1"
+description = "Fast forensic parser for zipped logical extractions in CTF competitions. by ShadowStrike."
+readme = "README.md"
+license = {text = "Proprietary"}
+authors = [
+    {name = "Strategos", email = "r@strategos.au"}
+]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Source" = "https://github.com/ShadowStrike-CTF/treska"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/treska"]
