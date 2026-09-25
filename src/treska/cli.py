@@ -1,5 +1,5 @@
 # Treska CLI — thin wrapper over parse_zip(). No parsing logic lives here.
-# © 2026 Strategos Pty Ltd. All rights reserved.
+# © 2026 ShadowStrike. All rights reserved.
 # Aut Viam Inveniam Aut Faciam
 
 from __future__ import annotations

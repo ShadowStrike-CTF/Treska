@@ -1,5 +1,5 @@
 # Treska core — magic byte detection and extension mismatch flagging.
-# © 2026 Strategos Pty Ltd. All rights reserved.
+# © 2026 ShadowStrike. All rights reserved.
 # Aut Viam Inveniam Aut Faciam
 
 from __future__ import annotations

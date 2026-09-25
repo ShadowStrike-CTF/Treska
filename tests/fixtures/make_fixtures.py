@@ -1,5 +1,5 @@
 # Treska test fixtures — regenerate with: python tests/fixtures/make_fixtures.py
-# © 2026 Strategos Pty Ltd. All rights reserved.
+# © 2026 ShadowStrike. All rights reserved.
 # Aut Viam Inveniam Aut Faciam
 
 from __future__ import annotations
