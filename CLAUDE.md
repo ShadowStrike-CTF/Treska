@@ -8,7 +8,7 @@ Web: treska --serve → localhost:7332
 
 Port 7332 ALWAYS for web mode (distinct from Sarissa 7331, Poligon 7333).
 
-## Core library (treska/core/) — shared, no duplication
+## Core library (src/treska/core/) — shared, no duplication
 ingestion.py — zip extraction, temp dir (try/finally cleanup, --keep)
 magic_check.py — python-magic, mismatch detection
 inventory.py — file inventory (path, size, extension, zip timestamp)
