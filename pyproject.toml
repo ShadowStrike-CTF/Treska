@@ -15,6 +15,11 @@ authors = [
     {name = "Strategos", email = "r@strategos.au"}
 ]
 requires-python = ">=3.11"
+dependencies = [
+    # Both ship the `magic` module — never install together.
+    "python-magic>=0.4.27; sys_platform != 'win32'",
+    "python-magic-bin>=0.4.14; sys_platform == 'win32'",
+]
 classifiers = [
     "Development Status :: 1 - Planning",
     "Programming Language :: Python :: 3",
@@ -26,5 +31,12 @@ classifiers = [
 [project.urls]
 "Source" = "https://github.com/ShadowStrike-CTF/treska"
 
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/treska"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
