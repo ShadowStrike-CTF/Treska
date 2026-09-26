@@ -20,6 +20,9 @@ dependencies = [
     "python-magic>=0.4.27; sys_platform != 'win32'",
     "python-magic-bin>=0.4.14; sys_platform == 'win32'",
     "rich>=13",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
 ]
 classifiers = [
     "Development Status :: 1 - Planning",
@@ -31,12 +34,13 @@ classifiers = [
 
 [project.scripts]
 treska = "treska.cli:main"
+treska-web = "treska.web.main:main"
 
 [project.urls]
 "Source" = "https://github.com/ShadowStrike-CTF/treska"
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "httpx>=0.27"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/treska"]

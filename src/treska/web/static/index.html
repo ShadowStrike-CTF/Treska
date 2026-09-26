@@ -1,0 +1,313 @@
+<!doctype html>
+<!-- Treska web UI — single file, no external dependencies.
+     © 2026 ShadowStrike. All rights reserved.
+     Aut Viam Inveniam Aut Faciam -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Treska</title>
+<style>
+  :root {
+    --crimson: #e74c3c;
+    --crimson-dim: rgba(231, 76, 60, 0.12);
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  header.top { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  header.top h1 { margin: 0; font-size: 22px; letter-spacing: 0.02em; }
+  header.top h1 span { color: var(--crimson); }
+  header.top p { margin: 0; color: var(--muted); }
+
+  #drop {
+    display: block;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    padding: 40px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #drop:hover, #drop:focus-within, #drop.over { border-color: var(--crimson); background: var(--crimson-dim); }
+  #drop.busy { cursor: progress; opacity: .7; }
+  #drop strong { display: block; font-size: 16px; margin-bottom: 4px; }
+  #drop small { color: var(--muted); }
+  #file { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+  #error {
+    display: none;
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--crimson);
+    border-left-width: 4px;
+    border-radius: 6px;
+    background: var(--crimson-dim);
+  }
+  #error.show { display: block; }
+  #error b { color: var(--crimson); }
+
+  #results { display: none; margin-top: 24px; }
+  #results.show { display: block; }
+  .summary {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .summary .name { font-weight: 600; font-size: 16px; word-break: break-all; flex: 1 1 100%; }
+  .stat { color: var(--muted); }
+  .stat b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .stat.alert b { color: var(--crimson); }
+  .summary .schema { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  button {
+    margin-left: auto;
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover, button:focus-visible { border-color: var(--crimson); outline: none; }
+
+  h2 { font-size: 15px; margin: 28px 0 10px; }
+  h2 .count { color: var(--muted); font-weight: normal; }
+  .muted { color: var(--muted); }
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--surface); color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: 0; }
+  td.path { font-family: var(--mono); font-size: 13px; word-break: break-all; min-width: 240px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .flag {
+    display: inline-block; margin: 0 4px 4px 0; padding: 0 6px;
+    border: 1px solid var(--border); border-radius: 10px;
+    font-size: 12px; color: var(--text);
+  }
+  .mismatch {
+    display: inline-block; margin: 0 4px 4px 0; padding: 0 6px;
+    border-radius: 10px; background: var(--crimson); color: #fff;
+    font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  }
+
+  .sqlite { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
+  .sqlite .file { font-family: var(--mono); font-weight: 600; word-break: break-all; }
+  .sqlite ul { margin: 6px 0 0; padding-left: 20px; }
+  .sqlite li { font-family: var(--mono); font-size: 13px; }
+  .sqlite li .cols { color: var(--muted); }
+
+  details { margin-top: 28px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+  summary:focus-visible { outline: 1px solid var(--crimson); outline-offset: 2px; }
+  .inv { margin-top: 10px; }
+  .entry { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .entry:last-child { border-bottom: 0; }
+  .entry .p { font-family: var(--mono); font-weight: 600; word-break: break-all; }
+  .entry .meta { color: var(--muted); font-size: 13px; }
+  .entry .hash { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow-x: auto; }
+  .entry .hash span { color: var(--muted); display: inline-block; width: 56px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1><span>Treska</span></h1>
+    <p>Fast forensic parser for zipped logical extractions</p>
+  </header>
+
+  <label id="drop" for="file">
+    <input id="file" type="file" accept=".zip,application/zip">
+    <strong id="drop-title">Drop a .zip here</strong>
+    <small id="drop-sub">or click to browse — parsed locally, nothing leaves this machine</small>
+  </label>
+
+  <div id="error" role="alert"></div>
+
+  <section id="results" aria-live="polite">
+    <div class="summary">
+      <div class="name" id="r-name"></div>
+      <span class="stat"><b id="r-files"></b> files</span>
+      <span class="stat" id="r-flagged-wrap"><b id="r-flagged"></b> flagged</span>
+      <span class="stat"><b id="r-sqlite"></b> SQLite</span>
+      <span class="stat" id="r-mismatch-wrap"><b id="r-mismatch"></b> magic mismatch</span>
+      <span class="schema" id="r-schema"></span>
+      <button type="button" id="export">Export JSON</button>
+    </div>
+
+    <h2>Flagged files <span class="count" id="flagged-count"></span></h2>
+    <div id="flagged"></div>
+
+    <h2>SQLite schemas <span class="count" id="sqlite-count"></span></h2>
+    <div id="sqlite"></div>
+
+    <details id="inventory-wrap">
+      <summary>Full inventory <span class="count muted" id="inv-count"></span></summary>
+      <div class="inv scroll" id="inventory"></div>
+    </details>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const DASH = "—";
+  const $ = (id) => document.getElementById(id);
+  const drop = $("drop"), input = $("file"), errorBox = $("error"), results = $("results");
+  let lastResult = null;
+
+  // Every value from the zip goes in via textContent: CTF archives can carry hostile filenames.
+  function el(tag, props, children) {
+    const node = document.createElement(tag);
+    if (props) for (const [k, v] of Object.entries(props)) {
+      if (k === "text") node.textContent = v; else node.setAttribute(k, v);
+    }
+    for (const c of children || []) if (c) node.appendChild(c);
+    return node;
+  }
+  const orDash = (v) => (v === null || v === undefined || v === "") ? DASH : String(v);
+
+  function showError(title, detail) {
+    errorBox.replaceChildren(el("b", { text: title }), document.createTextNode(detail ? " " + detail : ""));
+    errorBox.classList.add("show");
+  }
+  function clearError() { errorBox.classList.remove("show"); errorBox.replaceChildren(); }
+
+  function setBusy(busy, name) {
+    drop.classList.toggle("busy", busy);
+    input.disabled = busy;
+    $("drop-title").textContent = busy ? "Parsing " + name + "…" : "Drop a .zip here";
+  }
+
+  async function upload(file) {
+    if (!file) return;
+    clearError();
+    setBusy(true, file.name);
+    const body = new FormData();
+    body.append("file", file, file.name);
+    try {
+      const resp = await fetch("/api/parse", { method: "POST", body });
+      let data = null;
+      try { data = await resp.json(); } catch (_) { /* non-JSON error body */ }
+      if (!resp.ok) {
+        const msg = data && typeof data.error === "string" ? data.error : "HTTP " + resp.status;
+        showError(resp.status === 422 ? "Could not parse this file:" : "Server error:", msg);
+        return;
+      }
+      lastResult = data;
+      render(data);
+    } catch (err) {
+      showError("Network error:", "is the Treska server still running?");
+    } finally {
+      setBusy(false);
+      input.value = "";
+    }
+  }
+
+  function render(r) {
+    const sqlite = r.inventory.filter((e) => e.sqlite_schema !== null);
+    const mismatches = r.inventory.filter((e) => e.mismatch).length;
+
+    $("r-name").textContent = r.zip_path;
+    $("r-files").textContent = r.file_count;
+    $("r-flagged").textContent = r.flagged.length;
+    $("r-sqlite").textContent = sqlite.length;
+    $("r-mismatch").textContent = mismatches;
+    $("r-schema").textContent = "schema " + r.schema_version;
+    $("r-flagged-wrap").classList.toggle("alert", r.flagged.length > 0);
+    $("r-mismatch-wrap").classList.toggle("alert", mismatches > 0);
+
+    renderFlagged(r.flagged);
+    renderSqlite(sqlite);
+    renderInventory(r.inventory);
+    results.classList.add("show");
+  }
+
+  function badges(entry) {
+    const cell = el("td");
+    if (entry.mismatch) cell.appendChild(el("span", { class: "mismatch", text: "MISMATCH" }));
+    for (const f of entry.flags) cell.appendChild(el("span", { class: "flag", text: f }));
+    return cell;
+  }
+
+  function renderFlagged(flagged) {
+    $("flagged-count").textContent = "(" + flagged.length + ")";
+    const box = $("flagged");
+    if (!flagged.length) { box.replaceChildren(el("p", { class: "muted", text: "No flagged files." })); return; }
+    const head = el("tr", null, ["Path", "Flags", "Size", "Magic type"].map((h) => el("th", { text: h })));
+    const rows = flagged.map((e) => el("tr", null, [
+      el("td", { class: "path", text: e.path }),
+      badges(e),
+      el("td", { class: "num", text: e.size_bytes.toLocaleString() }),
+      el("td", { text: orDash(e.magic_type) }),
+    ]));
+    box.replaceChildren(el("div", { class: "scroll" }, [
+      el("table", null, [el("thead", null, [head]), el("tbody", null, rows)]),
+    ]));
+  }
+
+  function renderSqlite(entries) {
+    $("sqlite-count").textContent = "(" + entries.length + ")";
+    const box = $("sqlite");
+    if (!entries.length) { box.replaceChildren(el("p", { class: "muted", text: "No SQLite databases." })); return; }
+    box.replaceChildren(...entries.map((e) => {
+      const tables = (e.sqlite_schema && e.sqlite_schema.tables) || [];
+      const list = tables.length
+        ? el("ul", null, tables.map((t) => {
+            const cols = (t.columns || []).map((c) => (c.name + " " + (c.type || "")).trim()).join(", ");
+            return el("li", null, [document.createTextNode(t.name), el("span", { class: "cols", text: " (" + cols + ")" })]);
+          }))
+        : el("p", { class: "muted", text: "(no tables)" });
+      return el("div", { class: "sqlite" }, [el("div", { class: "file", text: e.path }), list]);
+    }));
+  }
+
+  function renderInventory(inventory) {
+    $("inv-count").textContent = "(" + inventory.length + ")";
+    $("inventory").replaceChildren(...inventory.map((e) => {
+      const title = el("div", { class: "p" }, [document.createTextNode(e.path + " ")]);
+      if (e.mismatch) title.appendChild(el("span", { class: "mismatch", text: "MISMATCH" }));
+      for (const f of e.flags) title.appendChild(el("span", { class: "flag", text: f }));
+      return el("div", { class: "entry" }, [
+        title,
+        el("div", { class: "meta", text:
+          "size " + e.size_bytes.toLocaleString() + " · ext " + orDash(e.extension) +
+          " · zip " + orDash(e.zip_timestamp) + " · " + orDash(e.mime) +
+          " · " + orDash(e.magic_type) }),
+        el("div", { class: "hash" }, [el("span", { text: "md5" }), document.createTextNode(orDash(e.md5))]),
+        el("div", { class: "hash" }, [el("span", { text: "sha256" }), document.createTextNode(orDash(e.sha256))]),
+      ]);
+    }));
+  }
+
+  $("export").addEventListener("click", () => {
+    if (!lastResult) return;
+    const blob = new Blob([JSON.stringify(lastResult, null, 2) + "\n"], { type: "application/json" });
+    const a = el("a", { href: URL.createObjectURL(blob), download: lastResult.zip_path.replace(/\.zip$/i, "") + ".treska.json" });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  input.addEventListener("change", () => upload(input.files[0]));
+  for (const ev of ["dragenter", "dragover"]) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); });
+  for (const ev of ["dragleave", "drop"]) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); });
+  drop.addEventListener("drop", (e) => { if (!input.disabled) upload(e.dataTransfer.files[0]); });
+  // Stop a stray drop outside the zone from navigating away from the results.
+  for (const ev of ["dragover", "drop"]) window.addEventListener(ev, (e) => e.preventDefault());
+})();
+</script>
+</body>
+</html>
