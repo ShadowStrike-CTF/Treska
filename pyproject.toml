@@ -1,4 +1,4 @@
-# © 2026 Strategos Pty Ltd. All rights reserved.
+# © 2026 ShadowStrike
 # Aut Viam Inveniam Aut Faciam
 
 [build-system]
@@ -7,10 +7,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "treska"
-version = "1.0.1"
+version = "1.0.2"
 description = "Fast forensic parser for zipped logical extractions in CTF competitions. by ShadowStrike."
 readme = "README.md"
-license = {text = "Proprietary"}
+license = {text = "MIT"}
 authors = [
     {name = "Strategos", email = "r@strategos.au"}
 ]
@@ -28,7 +28,7 @@ classifiers = [
     "Development Status :: 1 - Planning",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 
