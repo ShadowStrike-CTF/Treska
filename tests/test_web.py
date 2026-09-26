@@ -71,3 +71,26 @@ def test_parse_json_matches_cli():
 def test_parse_zip_path_is_str():
     data = _post("sample.zip", SAMPLE_ZIP.read_bytes()).json()
     assert isinstance(data["zip_path"], str)
+
+
+SARISSA_ORIGIN = "http://127.0.0.1:7331"
+
+
+def test_cors_allows_sarissa_origin():
+    resp = client.get("/api/health", headers={"Origin": SARISSA_ORIGIN})
+    assert resp.headers["access-control-allow-origin"] == SARISSA_ORIGIN
+
+
+def test_cors_parse_with_sarissa_origin():
+    resp = client.post(
+        "/api/parse",
+        files={"file": ("sample.zip", SAMPLE_ZIP.read_bytes(), "application/zip")},
+        headers={"Origin": SARISSA_ORIGIN},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == SARISSA_ORIGIN
+
+
+def test_cors_rejects_other_origin():
+    resp = client.get("/api/health", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in resp.headers
