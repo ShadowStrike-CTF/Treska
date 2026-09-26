@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "treska"
-version = "0.0.1"
+version = "1.0.1"
 description = "Fast forensic parser for zipped logical extractions in CTF competitions. by ShadowStrike."
 readme = "README.md"
 license = {text = "Proprietary"}
