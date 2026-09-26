@@ -15,6 +15,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from treska.core.pipeline import parse_zip
@@ -28,6 +29,10 @@ _STATIC = Path(__file__).resolve().parent / "static"
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Treska", docs_url=None, redoc_url=None, openapi_url=None)
+
+    # Sarissa (7331) reads parse results from the browser. Loopback origins only; never "*".
+    SARISSA_ORIGINS = ["http://127.0.0.1:7331", "http://localhost:7331"]
+    app.add_middleware(CORSMiddleware, allow_origins=SARISSA_ORIGINS, allow_methods=["GET", "POST"])
 
     @app.get("/api/health")
     def health() -> dict:
