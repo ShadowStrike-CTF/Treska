@@ -43,3 +43,12 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - Never drop hash columns when --no-hash — render — / null instead
 - Never break JSON schema without bumping schema_version
 - Never use git add -A — always path-scoped adds
+
+## PACKAGING (PyInstaller)
+Spec: treska.spec (onefile, console=False, pathex=['src'])
+Datas: src/treska/web/static/index.html → treska/web/static/
+Static dir: web/main.py resolves _STATIC from Path(__file__).parent / "static"; when frozen, __file__ is under sys._MEIPASS/treska/web/, so it lands on the bundled datas path.
+Devnull guard: __main__.py redirects sys.stdout/stderr to devnull when None (windowed exe crash fix).
+Build: pyinstaller treska.spec
+Output: dist/treska (Linux ELF)
+python-magic: hook-magic.py from pyinstaller-hooks-contrib handles it automatically.
