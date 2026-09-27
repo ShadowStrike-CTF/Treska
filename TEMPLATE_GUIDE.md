@@ -1,4 +1,4 @@
-# stub_template_v1_0_11 — Substitution Guide
+# stub_template_v1_0_12 — Substitution Guide
 
 Replace all placeholders before use. Search-and-replace across all files.
 
@@ -16,10 +16,10 @@ These files are pre-built and ready to use — substitution only, no new content
 
 | File | What it does |
 |------|--------------|
-| `pyproject.toml` | hatchling build backend, Proprietary licence, Python 3.11 floor, 3.11 + 3.12 classifiers, src layout wheel target, GitHub source URL |
+| `pyproject.toml` | hatchling build backend, MIT licence, Python 3.11 floor, 3.11 + 3.12 classifiers, src layout wheel target, GitHub source URL |
 | `src/PACKAGENAME/__init__.py` | Package entry point with copyright + motto header |
 | `README.md` | v1.6 format — one-liner, GitHub link, copyright footer, Aut Viam motto |
-| `LICENSE` | Proprietary licence under Strategos Pty Ltd (ACN 699 862 078) |
+| `LICENSE` | MIT licence — copyright holder "ShadowStrike" (no company identifier) |
 | `.gitignore` | Standard Python ignores (dist/, build/, __pycache__, *.egg-info) |
 | `TEMPLATE_GUIDE.md` | This file |
 | `.github/workflows/publish.yml` | Trusted OIDC publishing — fires on `git tag v*` push |
@@ -48,10 +48,10 @@ These files are pre-built and ready to use — substitution only, no new content
 ## File structure
 
 ```
-stub_template_v1_0_11/
-├── pyproject.toml               ← hatchling, src layout, Proprietary, 3.11 + 3.12 classifiers
+stub_template_v1_0_12/
+├── pyproject.toml               ← hatchling, src layout, MIT, 3.11 + 3.12 classifiers
 ├── README.md                    ← v1.6 format (GitHub link, one-liner, attribution, footer)
-├── LICENSE                      ← Proprietary
+├── LICENSE                      ← MIT
 ├── .gitignore
 ├── TEMPLATE_GUIDE.md            ← this file
 ├── src/
@@ -66,7 +66,7 @@ stub_template_v1_0_11/
 
 - Build backend: hatchling (Suite-wide — D stream and SA stream)
 - Package layout: src layout — `src/PACKAGENAME/`
-- Licence: Proprietary
+- Licence: MIT
 - Python floor: 3.11
 - Python classifiers (stubs): 3.11 + 3.12
 - Python classifiers (live SA tools): 3.11 only until PyInstaller 3.12 Windows verification done
@@ -89,6 +89,19 @@ git push origin v0.0.1
 ```
 
 ## Version history
+
+### v1.0.12 changes (B/1.1.37 — 27 Sep 2026)
+- LICENSE: removed ACN from Strategos Pty Ltd copyright line — now "Strategos Pty Ltd" only
+- LICENSE (ShadowStrike substitution): "ShadowStrike" with no company identifier
+- Internal-only notation rule formalised (BAC v1.20):
+  must NOT appear in any externally visible content (GitHub README, PyPI descriptions,
+  commit messages, or any public-facing output — any stream, including M Pumpkin)
+
+### v1.0.11 changes (B/1.1.37 — 27 Sep 2026)
+- Version reference updated to stub_template_v1_0_11
+- Licence corrected to MIT — Megdan CTF line default (updated ruling B/1.1.37, 27 Sep 2026)
+- Copyright: © 2026 ShadowStrike. All rights reserved. per BAC v1.19
+- Commit trailer: Co-Authored-By: Digger (Claude Opus 5.5) <noreply@anthropic.com>
 
 ### v1.0.10 changes
 - pyproject.toml: `Programming Language :: Python :: 3.12` added to classifiers
