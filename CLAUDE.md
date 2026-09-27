@@ -4,9 +4,9 @@ by ShadowStrike. MIT.
 
 ## Dual delivery mode
 CLI: treska challenge.zip [options]
-Web: treska --serve → localhost:7332
+Web: python -m treska  or  treska-web → 127.0.0.1:7332
 
-Port 7332 ALWAYS for web mode (distinct from Sarissa 7331, Poligon 7333).
+Port 7332 ALWAYS for web mode — single PORT constant in web/main.py (distinct from Sarissa 7331, Poligon 7333).
 
 ## Core library (src/treska/core/) — shared, no duplication
 ingestion.py — zip extraction, temp dir (try/finally cleanup, --keep)
@@ -17,8 +17,9 @@ sqlite_probe.py — SQLite schema extraction (magic bytes, not extension)
 output.py — ParseResult dataclass consumed by both CLI and web
 
 ## CLI: treska/cli.py (thin wrapper over core)
-## Web: treska/web.py (FastAPI, thin wrapper over core)
-## Web frontend: treska/static/index.html (drag-drop, inline results, export buttons)
+## Web: src/treska/web/main.py (FastAPI, thin wrapper over core)
+## Web frontend: src/treska/web/static/index.html (drag-drop, inline results, one Export JSON button)
+## CORS: loopback-only — http://127.0.0.1:7331 and http://localhost:7331 (Sarissa integration); never "*"
 
 ## Tech stack
 Python 3.11, python-magic (+ python-magic-bin Windows), rich, FastAPI, uvicorn,
@@ -26,7 +27,7 @@ concurrent.futures.ThreadPoolExecutor (hash parallelism > 100 files — NEVER
 ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsewhere.
 
 ## Key invariants
-- Core library: NO duplication between cli.py and web.py
+- Core library: NO duplication between cli.py and web/main.py
 - Port: 7332 ALWAYS for web mode
 - --out: ALL output to file, nothing to console except "Written to:" line
 - Mismatch flagging: NEVER suppressed by any flag
@@ -36,7 +37,7 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - JSON schema: stable at v1.0.0, schema_version field in every output
 
 ## WHAT NOT TO DO
-- Never duplicate parsing logic between cli.py and web.py
+- Never duplicate parsing logic between cli.py and web/main.py
 - Never use ProcessPoolExecutor (fork-bomb under PyInstaller on Windows)
 - Never split output between console and file when --out is set
 - Never suppress mismatch flags
