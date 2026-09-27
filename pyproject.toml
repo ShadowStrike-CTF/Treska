@@ -12,7 +12,7 @@ description = "Fast forensic parser for zipped logical extractions in CTF compet
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Strategos", email = "r@strategos.au"}
+  {name = "ShadowStrike"},
 ]
 requires-python = ">=3.11"
 dependencies = [
