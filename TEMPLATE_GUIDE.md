@@ -1,4 +1,4 @@
-# stub_template_v1_0_10 — Substitution Guide
+# stub_template_v1_0_11 — Substitution Guide
 
 Replace all placeholders before use. Search-and-replace across all files.
 
@@ -48,7 +48,7 @@ These files are pre-built and ready to use — substitution only, no new content
 ## File structure
 
 ```
-stub_template_v1_0_10/
+stub_template_v1_0_11/
 ├── pyproject.toml               ← hatchling, src layout, Proprietary, 3.11 + 3.12 classifiers
 ├── README.md                    ← v1.6 format (GitHub link, one-liner, attribution, footer)
 ├── LICENSE                      ← Proprietary
