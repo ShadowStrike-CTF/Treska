@@ -51,11 +51,13 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 
 ## Phase 6 (v1.1.0)
 - EVTX triage: python-evtx (pure Python, imports as `Evtx`), HIGH_VALUE_IDS module-level constant (16 IDs), SAMPLE_CAP = 3
-- Per-file result on FileEntry.triage: status parsed / empty / corrupt; record_errors counts unreadable records and missing chunks
-- Detect-and-defer: E01 (EVF magic), VHDX (vhdxfile), AD1 (ADSEGMENTEDFILE or c1d0eade), DD/IMG/BIN by extension only when libmagic says application/octet-stream → status: deferred, listed in ParseResult.deferred_files
+- Per-file result on FileEntry.triage: status parsed / empty / corrupt
+- record_errors: count of unparseable records or truncated chunks within an otherwise valid log — does not mark the log corrupt.
+- Detect-and-defer: E01 (EVF magic), VHDX (vhdxfile), AD1 (ADSEGMENTEDFILE), DD/IMG/BIN by extension only when libmagic says application/octet-stream → status: deferred, listed in ParseResult.deferred_files
+- Legacy .evt ("LfLe" at offset 4) → its own deferred type (format "evt"), message says convert to .evtx with Event Viewer or wevtutil — not a disk image
 - Magic byte takes precedence over extension; a .evtx without ElfFile magic is reported corrupt, never skipped
 - Schema 1.0.0 → 1.1.0 (additive: FileEntry.triage, ParseResult.deferred_files)
-- Tests: 42 → 53 (tests/test_phase6_evtx.py builds synthetic EVTX in-test; no real case data)
+- Tests: 42 → 55 (tests/test_phase6_evtx.py builds synthetic EVTX in-test; no real case data)
 
 ## PACKAGING (PyInstaller)
 Spec: treska.spec (onefile, console=False, pathex=['src'])

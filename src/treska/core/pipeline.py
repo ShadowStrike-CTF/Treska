@@ -15,30 +15,35 @@ from treska.core.output import FileEntry, ParseResult, build_parse_result
 from treska.core.sqlite_probe import probe_sqlite
 from treska.parsers.evtx import EVTX_MAGIC, parse_evtx
 
-# Forensic containers Treska does not open: (magic prefix, format, tool).
-DEFERRED_MAGIC: tuple[tuple[bytes, str, str], ...] = (
-    (b"EVF", "e01", "Use FTK Imager or ewfmount"),
-    (b"vhdxfile", "vhdx", "Use libvhdi or Windows disk management"),
-    (b"ADSEGMENTEDFILE", "ad1", "Use FTK Imager"),
-    (b"\xc1\xd0\xea\xde", "ad1", "Use FTK Imager"),
+_EXTRACT = " to extract before submitting to Treska."
+
+# Formats Treska does not open: (offset, signature, format, message).
+DEFERRED_MAGIC: tuple[tuple[int, bytes, str, str], ...] = (
+    (0, b"EVF", "e01", "Use FTK Imager or ewfmount" + _EXTRACT),
+    (0, b"vhdxfile", "vhdx", "Use libvhdi or Windows disk management" + _EXTRACT),
+    (0, b"ADSEGMENTEDFILE", "ad1", "Use FTK Imager" + _EXTRACT),
+    # Legacy .evt: ELF_LOGFILE_HEADER is HeaderSize (0x30) then "LfLe".
+    (4, b"LfLe", "evt",
+     "Legacy Windows Event Log format — convert to .evtx using Windows Event Viewer "
+     "or wevtutil before submitting to Treska."),
 )
 # Raw images have no magic, so the extension decides — but only when libmagic
 # could not identify the file (magic always beats extension).
 DEFERRED_EXTENSIONS: dict[str, str] = {
-    "dd": "Use Autopsy or The Sleuth Kit",
-    "img": "Use Autopsy or The Sleuth Kit",
-    "bin": "Use Autopsy or The Sleuth Kit",
+    "dd": "Use Autopsy or The Sleuth Kit" + _EXTRACT,
+    "img": "Use Autopsy or The Sleuth Kit" + _EXTRACT,
+    "bin": "Use Autopsy or The Sleuth Kit" + _EXTRACT,
 }
 _UNIDENTIFIED_MIME = "application/octet-stream"
 _SNIFF_BYTES = 16
 
 
-def _deferred(path: str, fmt: str, tool: str) -> dict:
+def _deferred(path: str, fmt: str, message: str) -> dict:
     return {
         "filename": path,
         "format": fmt,
         "status": "deferred",
-        "message": f"{tool} to extract before submitting to Treska.",
+        "message": message,
     }
 
 
@@ -56,9 +61,9 @@ def triage_file(file_path: Path, path: str, extension: str, mime: str) -> dict |
         return None
     if head.startswith(EVTX_MAGIC):
         return parse_evtx(Path(file_path).read_bytes(), filename=path)
-    for magic_prefix, fmt, tool in DEFERRED_MAGIC:
-        if head.startswith(magic_prefix):
-            return _deferred(path, fmt, tool)
+    for offset, signature, fmt, message in DEFERRED_MAGIC:
+        if head[offset:offset + len(signature)] == signature:
+            return _deferred(path, fmt, message)
     if extension == "evtx":
         return parse_evtx(head, filename=path)
     if extension in DEFERRED_EXTENSIONS and mime == _UNIDENTIFIED_MIME:

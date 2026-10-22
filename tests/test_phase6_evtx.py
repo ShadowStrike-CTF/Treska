@@ -235,3 +235,25 @@ def test_evtx_deferred_vhdx(tmp_path):
     assert triage["status"] == "deferred"
     assert triage["format"] == "vhdx"
     assert [d["filename"] for d in result.deferred_files] == ["vm.vhdx"]
+
+
+def test_deferred_ad1(tmp_path):
+    ad1 = b"ADSEGMENTEDFILE\x00" + b"\x00" * 512
+    result = parse_zip(_zip(tmp_path, {"export.ad1": ad1}))
+    triage = _entry(result, "export.ad1").triage
+    assert triage["status"] == "deferred"
+    assert triage["format"] == "ad1"
+
+
+def test_deferred_legacy_evt(tmp_path):
+    # Named .bin to prove magic, not extension, decides the format.
+    evt = struct.pack("<I", 0x30) + b"LfLe" + b"\x00" * 512
+    result = parse_zip(_zip(tmp_path, {"logs/AppEvent.bin": evt}))
+    triage = _entry(result, "logs/AppEvent.bin").triage
+    assert triage["status"] == "deferred"
+    assert triage["format"] == "evt"
+    assert triage["message"] == (
+        "Legacy Windows Event Log format — convert to .evtx using Windows Event Viewer "
+        "or wevtutil before submitting to Treska."
+    )
+    assert result.deferred_files == [triage]
