@@ -141,6 +141,8 @@
       <span class="stat"><b id="r-files"></b> files</span>
       <span class="stat" id="r-flagged-wrap"><b id="r-flagged"></b> flagged</span>
       <span class="stat"><b id="r-sqlite"></b> SQLite</span>
+      <span class="stat"><b id="r-evtx"></b> EVTX</span>
+      <span class="stat" id="r-deferred-wrap"><b id="r-deferred"></b> deferred</span>
       <span class="stat" id="r-mismatch-wrap"><b id="r-mismatch"></b> magic mismatch</span>
       <span class="schema" id="r-schema"></span>
       <button type="button" id="export">Export JSON</button>
@@ -151,6 +153,12 @@
 
     <h2>SQLite schemas <span class="count" id="sqlite-count"></span></h2>
     <div id="sqlite"></div>
+
+    <h2>Event logs <span class="count" id="evtx-count"></span></h2>
+    <div id="evtx"></div>
+
+    <h2>Deferred containers <span class="count" id="deferred-count"></span></h2>
+    <div id="deferred"></div>
 
     <details id="inventory-wrap">
       <summary>Full inventory <span class="count muted" id="inv-count"></span></summary>
@@ -217,19 +225,26 @@
 
   function render(r) {
     const sqlite = r.inventory.filter((e) => e.sqlite_schema !== null);
+    const evtx = r.inventory.filter((e) => e.triage && e.triage.format === "evtx");
+    const deferred = r.deferred_files || [];
     const mismatches = r.inventory.filter((e) => e.mismatch).length;
 
     $("r-name").textContent = r.zip_path;
     $("r-files").textContent = r.file_count;
     $("r-flagged").textContent = r.flagged.length;
     $("r-sqlite").textContent = sqlite.length;
+    $("r-evtx").textContent = evtx.length;
+    $("r-deferred").textContent = deferred.length;
     $("r-mismatch").textContent = mismatches;
     $("r-schema").textContent = "schema " + r.schema_version;
     $("r-flagged-wrap").classList.toggle("alert", r.flagged.length > 0);
     $("r-mismatch-wrap").classList.toggle("alert", mismatches > 0);
+    $("r-deferred-wrap").classList.toggle("alert", deferred.length > 0);
 
     renderFlagged(r.flagged);
     renderSqlite(sqlite);
+    renderEvtx(evtx.map((e) => e.triage));
+    renderDeferred(deferred);
     renderInventory(r.inventory);
     results.classList.add("show");
   }
@@ -271,6 +286,39 @@
         : el("p", { class: "muted", text: "(no tables)" });
       return el("div", { class: "sqlite" }, [el("div", { class: "file", text: e.path }), list]);
     }));
+  }
+
+  function renderEvtx(logs) {
+    $("evtx-count").textContent = "(" + logs.length + ")";
+    const box = $("evtx");
+    if (!logs.length) { box.replaceChildren(el("p", { class: "muted", text: "No event logs." })); return; }
+    box.replaceChildren(...logs.map((t) => {
+      let summary = t.status + " · " + t.event_count + " events";
+      if (t.record_errors) summary += " · " + t.record_errors + " unreadable";
+      if (t.error) summary += " · " + t.error;
+      const top = t.top_event_ids.map((x) => x.event_id + "×" + x.count).join(", ");
+      const items = t.high_value_events.map((h) => el("li", null, [
+        document.createTextNode(h.event_id + " " + h.label + " ×" + h.count),
+        ...h.samples.map((s) => el("div", { class: "cols", text: s.time_created + " " + s.computer + " " +
+          Object.entries(s.event_data).map(([k, v]) => k + "=" + v).join(" ") })),
+      ]));
+      return el("div", { class: "sqlite" }, [
+        el("div", { class: "file", text: t.filename }),
+        el("div", { class: "muted", text: summary }),
+        top ? el("div", { class: "cols", text: "top IDs: " + top }) : null,
+        items.length ? el("ul", null, items) : null,
+      ]);
+    }));
+  }
+
+  function renderDeferred(deferred) {
+    $("deferred-count").textContent = "(" + deferred.length + ")";
+    const box = $("deferred");
+    if (!deferred.length) { box.replaceChildren(el("p", { class: "muted", text: "No forensic containers." })); return; }
+    box.replaceChildren(...deferred.map((d) => el("div", { class: "sqlite" }, [
+      el("div", { class: "file", text: d.filename + " (" + d.format + ")" }),
+      el("div", { class: "muted", text: d.message }),
+    ])));
   }
 
   function renderInventory(inventory) {

@@ -56,8 +56,8 @@ def test_cli_valid_zip_json_flag():
 
 def test_cli_valid_zip_json_structure():
     data = json.loads(_run(str(SAMPLE_ZIP), "--json").stdout)
-    assert set(data) == {"schema_version", "zip_path", "file_count", "flagged", "inventory"}
-    assert data["schema_version"] == "1.0.0"
+    assert set(data) == {"schema_version", "zip_path", "file_count", "flagged", "inventory", "deferred_files"}
+    assert data["schema_version"] == "1.1.0"
     assert isinstance(data["zip_path"], str)
     assert data["file_count"] == len(data["inventory"])
     for entry in data["inventory"]:

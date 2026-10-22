@@ -15,6 +15,10 @@ inventory.py — file inventory (path, size, extension, zip timestamp)
 heuristics.py — 8 interesting-file flags
 sqlite_probe.py — SQLite schema extraction (magic bytes, not extension)
 output.py — ParseResult dataclass consumed by both CLI and web
+pipeline.py — parse_zip() entry point; triage_file() magic-byte dispatch (EVTX / deferred)
+
+## Parsers (src/treska/parsers/)
+evtx.py — EVTX triage via python-evtx; HIGH_VALUE_IDS, SAMPLE_CAP module constants
 
 ## CLI: treska/cli.py (thin wrapper over core)
 ## Web: src/treska/web/main.py (FastAPI, thin wrapper over core)
@@ -22,7 +26,7 @@ output.py — ParseResult dataclass consumed by both CLI and web
 ## CORS: loopback-only — http://127.0.0.1:7331 and http://localhost:7331 (Sarissa integration); never "*"
 
 ## Tech stack
-Python 3.11, python-magic (+ python-magic-bin Windows), rich, FastAPI, uvicorn,
+Python 3.11, python-magic (+ python-magic-bin Windows), rich, FastAPI, uvicorn, python-evtx,
 concurrent.futures.ThreadPoolExecutor (hash parallelism > 100 files — NEVER
 ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsewhere.
 
@@ -34,7 +38,7 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - --no-hash: hash columns always present, render as — (console/file) or null (JSON)
 - ThreadPoolExecutor only — NEVER ProcessPoolExecutor
 - Temp dir: ALWAYS cleaned on exit, even on error (try/finally)
-- JSON schema: stable at v1.0.0, schema_version field in every output
+- JSON schema: stable at v1.1.0, schema_version field in every output
 
 ## WHAT NOT TO DO
 - Never duplicate parsing logic between cli.py and web/main.py
@@ -44,6 +48,16 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - Never drop hash columns when --no-hash — render — / null instead
 - Never break JSON schema without bumping schema_version
 - Never use git add -A — always path-scoped adds
+
+## Phase 6 (v1.1.0)
+- EVTX triage: python-evtx (pure Python, imports as `Evtx`), HIGH_VALUE_IDS module-level constant (16 IDs), SAMPLE_CAP = 3
+- Per-file result on FileEntry.triage: status parsed / empty / corrupt
+- record_errors: count of unparseable records or truncated chunks within an otherwise valid log — does not mark the log corrupt.
+- Detect-and-defer: E01 (EVF magic), VHDX (vhdxfile), AD1 (ADSEGMENTEDFILE), DD/IMG/BIN by extension only when libmagic says application/octet-stream → status: deferred, listed in ParseResult.deferred_files
+- Legacy .evt ("LfLe" at offset 4) → its own deferred type (format "evt"), message says convert to .evtx with Event Viewer or wevtutil — not a disk image
+- Magic byte takes precedence over extension; a .evtx without ElfFile magic is reported corrupt, never skipped
+- Schema 1.0.0 → 1.1.0 (additive: FileEntry.triage, ParseResult.deferred_files)
+- Tests: 42 → 55 (tests/test_phase6_evtx.py builds synthetic EVTX in-test; no real case data)
 
 ## PACKAGING (PyInstaller)
 Spec: treska.spec (onefile, console=False, pathex=['src'])

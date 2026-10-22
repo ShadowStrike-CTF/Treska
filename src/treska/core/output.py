@@ -6,7 +6,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = "1.0.0"
+# 1.1.0: added FileEntry.triage and ParseResult.deferred_files (additive).
+SCHEMA_VERSION = "1.1.0"
 
 
 @dataclass
@@ -22,6 +23,8 @@ class FileEntry:
     md5: str | None
     sha256: str | None
     sqlite_schema: dict | None
+    # EVTX triage or a "deferred" container notice; None for everything else.
+    triage: dict | None = None
 
 
 @dataclass
@@ -31,11 +34,13 @@ class ParseResult:
     file_count: int = 0
     flagged: list[FileEntry] = field(default_factory=list)
     inventory: list[FileEntry] = field(default_factory=list)
+    deferred_files: list[dict] = field(default_factory=list)
 
 
 def build_parse_result(zip_path: str, entries: list[FileEntry]) -> ParseResult:
     """inventory = all entries by path; flagged = the same objects with flags,
-    most flags first (path breaks ties)."""
+    most flags first (path breaks ties); deferred_files = containers to open
+    with another tool first."""
     inventory = sorted(entries, key=lambda e: e.path)
     flagged = sorted((e for e in inventory if e.flags), key=lambda e: (-len(e.flags), e.path))
     return ParseResult(
@@ -43,4 +48,8 @@ def build_parse_result(zip_path: str, entries: list[FileEntry]) -> ParseResult:
         file_count=len(inventory),
         flagged=flagged,
         inventory=inventory,
+        deferred_files=[
+            e.triage for e in inventory
+            if e.triage is not None and e.triage.get("status") == "deferred"
+        ],
     )
