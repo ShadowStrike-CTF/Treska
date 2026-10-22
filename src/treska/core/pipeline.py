@@ -13,6 +13,57 @@ from treska.core.inventory import build_inventory
 from treska.core.magic_check import check_magic
 from treska.core.output import FileEntry, ParseResult, build_parse_result
 from treska.core.sqlite_probe import probe_sqlite
+from treska.parsers.evtx import EVTX_MAGIC, parse_evtx
+
+# Forensic containers Treska does not open: (magic prefix, format, tool).
+DEFERRED_MAGIC: tuple[tuple[bytes, str, str], ...] = (
+    (b"EVF", "e01", "Use FTK Imager or ewfmount"),
+    (b"vhdxfile", "vhdx", "Use libvhdi or Windows disk management"),
+    (b"ADSEGMENTEDFILE", "ad1", "Use FTK Imager"),
+    (b"\xc1\xd0\xea\xde", "ad1", "Use FTK Imager"),
+)
+# Raw images have no magic, so the extension decides — but only when libmagic
+# could not identify the file (magic always beats extension).
+DEFERRED_EXTENSIONS: dict[str, str] = {
+    "dd": "Use Autopsy or The Sleuth Kit",
+    "img": "Use Autopsy or The Sleuth Kit",
+    "bin": "Use Autopsy or The Sleuth Kit",
+}
+_UNIDENTIFIED_MIME = "application/octet-stream"
+_SNIFF_BYTES = 16
+
+
+def _deferred(path: str, fmt: str, tool: str) -> dict:
+    return {
+        "filename": path,
+        "format": fmt,
+        "status": "deferred",
+        "message": f"{tool} to extract before submitting to Treska.",
+    }
+
+
+def triage_file(file_path: Path, path: str, extension: str, mime: str) -> dict | None:
+    """Format-specific triage, dispatched on magic bytes first, extension second.
+
+    EVTX -> parse_evtx dict; forensic container -> status "deferred"; else None.
+    A ".evtx" without the ElfFile header still goes to parse_evtx so it is
+    reported as corrupt rather than silently skipped.
+    """
+    try:
+        with open(file_path, "rb") as fh:
+            head = fh.read(_SNIFF_BYTES)
+    except OSError:
+        return None
+    if head.startswith(EVTX_MAGIC):
+        return parse_evtx(Path(file_path).read_bytes(), filename=path)
+    for magic_prefix, fmt, tool in DEFERRED_MAGIC:
+        if head.startswith(magic_prefix):
+            return _deferred(path, fmt, tool)
+    if extension == "evtx":
+        return parse_evtx(head, filename=path)
+    if extension in DEFERRED_EXTENSIONS and mime == _UNIDENTIFIED_MIME:
+        return _deferred(path, extension, DEFERRED_EXTENSIONS[extension])
+    return None
 
 
 def parse_zip(zip_path: Path, keep: bool = False, no_hash: bool = False) -> ParseResult:
@@ -44,6 +95,7 @@ def parse_zip(zip_path: Path, keep: bool = False, no_hash: bool = False) -> Pars
                 md5=md5,
                 sha256=sha256,
                 sqlite_schema=probe_sqlite(file_path) if "sqlite" in flags else None,
+                triage=triage_file(file_path, row["path"], row["extension"], magic_result["mime"]),
             ))
         return build_parse_result(str(zip_path), entries)
     finally:

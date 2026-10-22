@@ -66,7 +66,7 @@ def main() -> None:
 
 
 def _to_dict(result: ParseResult) -> dict:
-    """ParseResult (a dataclass tree) -> plain dict matching the v1.0.0 JSON schema."""
+    """ParseResult (a dataclass tree) -> plain dict matching the v1.1.0 JSON schema."""
     return dataclasses.asdict(result)
 
 
@@ -75,15 +75,18 @@ def _or_dash(value: object) -> str:
 
 
 def _pretty_print(result: ParseResult, *, verbose: bool = False) -> None:
-    """Rich summary: counts, flagged files, SQLite schemas; verbose adds full inventory."""
+    """Rich summary: counts, flagged files, SQLite schemas, EVTX triage, deferred
+    containers; verbose adds full inventory."""
     console = Console(highlight=False)
     sqlite_entries = [e for e in result.inventory if e.sqlite_schema is not None]
+    evtx_entries = [e for e in result.inventory if e.triage and e.triage.get("format") == "evtx"]
     mismatches = sum(1 for e in result.inventory if e.mismatch)
 
     console.print(Text(f"Treska — {result.zip_path}", style="bold"))
     console.print(
         f"schema {result.schema_version} · {result.file_count} files · "
         f"{len(result.flagged)} flagged · {len(sqlite_entries)} SQLite · "
+        f"{len(evtx_entries)} EVTX · {len(result.deferred_files)} deferred · "
         f"{mismatches} magic mismatch"
     )
 
@@ -111,8 +114,33 @@ def _pretty_print(result: ParseResult, *, verbose: bool = False) -> None:
             cols = ", ".join(f"{c['name']} {c['type']}".strip() for c in tbl["columns"])
             console.print(Text(f"  {tbl['name']}({cols})"))
 
+    for entry in evtx_entries:
+        _print_evtx(console, entry.triage)
+
+    for deferred in result.deferred_files:
+        console.print(Text(f"Deferred: {deferred['filename']} ({deferred['format']})", style="bold yellow"))
+        console.print(Text(f"  {deferred['message']}"))
+
     if verbose:
         _print_inventory(console, result.inventory)
+
+
+def _print_evtx(console: Console, triage: dict) -> None:
+    header = Text(f"EVTX: {triage['filename']}", style="bold")
+    header.append(f"  {triage['status']} · {triage['event_count']} events")
+    if triage.get("record_errors"):
+        header.append(f" · {triage['record_errors']} unreadable", style="red")
+    console.print(header)
+    if triage.get("error"):
+        console.print(Text(f"  {triage['error']}", style="red"))
+    if triage["top_event_ids"]:
+        top = ", ".join(f"{t['event_id']}×{t['count']}" for t in triage["top_event_ids"])
+        console.print(Text(f"  top IDs: {top}"))
+    for hv in triage["high_value_events"]:
+        console.print(Text(f"  {hv['event_id']} {hv['label']} ×{hv['count']}", style="bold"))
+        for sample in hv["samples"]:
+            data = " ".join(f"{k}={v}" for k, v in sample["event_data"].items())
+            console.print(Text(f"    {sample['time_created']} {sample['computer']} {data}".rstrip()))
 
 
 def _print_inventory(console: Console, inventory: list[FileEntry]) -> None:
