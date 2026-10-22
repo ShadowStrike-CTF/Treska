@@ -1,4 +1,4 @@
-# © 2026 Strategos Pty Ltd. All rights reserved.
+# © 2026 ShadowStrike
 # Aut Viam Inveniam Aut Faciam
 
 [build-system]
@@ -7,25 +7,46 @@ build-backend = "hatchling.build"
 
 [project]
 name = "treska"
-version = "0.0.1"
+version = "1.1.0"
 description = "Fast forensic parser for zipped logical extractions in CTF competitions. by ShadowStrike."
 readme = "README.md"
-license = {text = "Proprietary"}
+license = {text = "MIT"}
 authors = [
-    {name = "Strategos", email = "r@strategos.au"}
+  {name = "ShadowStrike"},
 ]
 requires-python = ">=3.11"
+dependencies = [
+    # Both ship the `magic` module — never install together.
+    "python-magic>=0.4.27; sys_platform != 'win32'",
+    "python-magic-bin>=0.4.14; sys_platform == 'win32'",
+    "rich>=13",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    # Pure Python (imports as "Evtx") — PyInstaller-clean, no C extensions.
+    "python-evtx>=0.8.1",
+]
 classifiers = [
     "Development Status :: 1 - Planning",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.scripts]
+treska = "treska.cli:main"
+treska-web = "treska.web.main:main"
 
 [project.urls]
 "Source" = "https://github.com/ShadowStrike-CTF/treska"
 
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/treska"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
