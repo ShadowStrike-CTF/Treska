@@ -39,7 +39,7 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - --no-hash: hash columns always present, render as — (console/file) or null (JSON)
 - ThreadPoolExecutor only — NEVER ProcessPoolExecutor
 - Temp dir: ALWAYS cleaned on exit, even on error (try/finally)
-- JSON schema: stable at v1.1.0, schema_version field in every output
+- JSON schema: stable at v1.2.0, schema_version field in every output
 
 ## WHAT NOT TO DO
 - Never duplicate parsing logic between cli.py and web/main.py
@@ -77,7 +77,8 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
   4. directory matching com.android.* (any suffix, e.g. com.android.providers.telephony)
 - Order: iOS check runs FIRST over the whole tree; IOS_FFS returned as soon as a marker
   is found. Android check only runs when no iOS marker exists. Neither → UNKNOWN.
-- Names match exactly (case-sensitive), as the OS writes them.
+- Names match case-insensitively (casefold) — extraction tools capitalise
+  inconsistently and a miss mid-CTF is a false negative (R, M/1.1.8).
 - Filename/dirname only — NEVER opens, reads or stats file contents.
 - Recursive walk (os.walk, followlinks=False) — no hardcoded depth.
 - Missing or non-directory tree_root → UNKNOWN (never raises).
@@ -92,7 +93,8 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - Package version 1.1.0 → 1.2.0 in pyproject.toml (new capability = MINOR).
 - Tests: tests/test_detect.py builds synthetic trees in tmp_path; no real case data.
   Minimum 8: homedomain, appdomain, sms_db, knowledgec, addressbook, android_logical,
-  unknown, ios_priority_over_android; plus parse_zip integration.
+  unknown, ios_priority_over_android; plus case_insensitive and parse_zip integration.
+- Tests: 55 → 65
 
 ## PACKAGING (PyInstaller)
 Spec: treska.spec (onefile, console=False, pathex=['src'])

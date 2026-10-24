@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from treska.core.detect import detect_extraction_type
 from treska.core.hashing import compute_hashes
 from treska.core.heuristics import flag_file
 from treska.core.ingestion import cleanup, extract
@@ -102,7 +103,7 @@ def parse_zip(zip_path: Path, keep: bool = False, no_hash: bool = False) -> Pars
                 sqlite_schema=probe_sqlite(file_path) if "sqlite" in flags else None,
                 triage=triage_file(file_path, row["path"], row["extension"], magic_result["mime"]),
             ))
-        return build_parse_result(str(zip_path), entries)
+        return build_parse_result(str(zip_path), entries, detect_extraction_type(temp_dir))
     finally:
         if not keep:
             cleanup(temp_dir)
