@@ -16,6 +16,7 @@ heuristics.py — 8 interesting-file flags
 sqlite_probe.py — SQLite schema extraction (magic bytes, not extension)
 output.py — ParseResult dataclass consumed by both CLI and web
 pipeline.py — parse_zip() entry point; triage_file() magic-byte dispatch (EVTX / deferred)
+detect.py — detect_extraction_type(): IOS_FFS / ANDROID_LOGICAL / UNKNOWN by name only
 
 ## Parsers (src/treska/parsers/)
 evtx.py — EVTX triage via python-evtx; HIGH_VALUE_IDS, SAMPLE_CAP module constants
@@ -38,7 +39,7 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - --no-hash: hash columns always present, render as — (console/file) or null (JSON)
 - ThreadPoolExecutor only — NEVER ProcessPoolExecutor
 - Temp dir: ALWAYS cleaned on exit, even on error (try/finally)
-- JSON schema: stable at v1.1.0, schema_version field in every output
+- JSON schema: stable at v1.2.0, schema_version field in every output
 
 ## WHAT NOT TO DO
 - Never duplicate parsing logic between cli.py and web/main.py
@@ -58,6 +59,42 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - Magic byte takes precedence over extension; a .evtx without ElfFile magic is reported corrupt, never skipped
 - Schema 1.0.0 → 1.1.0 (additive: FileEntry.triage, ParseResult.deferred_files)
 - Tests: 42 → 55 (tests/test_phase6_evtx.py builds synthetic EVTX in-test; no real case data)
+
+## Phase 7 (v1.2.0) — extraction type detection
+- New file src/treska/core/detect.py: detect_extraction_type(tree_root: Path) -> str
+- Return values (module constants): "IOS_FFS", "ANDROID_LOGICAL", "UNKNOWN"
+- iOS FFS markers — any one anywhere in the tree → IOS_FFS:
+  1. directory named HomeDomain
+  2. directory matching AppDomain-* (any suffix)
+  3. file named sms.db
+  4. file named KnowledgeC.db
+  5. file named AddressBook.sqlitedb
+- Android logical markers — no Android detection existed before Phase 7, so detect.py
+  defines it (any one anywhere in the tree → ANDROID_LOGICAL):
+  1. file named mmssms.db
+  2. file named contacts2.db
+  3. file named calllog.db
+  4. directory matching com.android.* (any suffix, e.g. com.android.providers.telephony)
+- Order: iOS check runs FIRST over the whole tree; IOS_FFS returned as soon as a marker
+  is found. Android check only runs when no iOS marker exists. Neither → UNKNOWN.
+- Names match case-insensitively (casefold) — extraction tools capitalise
+  inconsistently and a miss mid-CTF is a false negative (R, M/1.1.8).
+- Filename/dirname only — NEVER opens, reads or stats file contents.
+- Recursive walk (os.walk, followlinks=False) — no hardcoded depth.
+- Missing or non-directory tree_root → UNKNOWN (never raises).
+- Integration: parse_zip() returns a ParseResult dataclass (not a dict). Add
+  ParseResult.extraction_type: str = "UNKNOWN" as a top-level field, set from
+  detect_extraction_type(temp_dir) after extraction, before temp-dir cleanup.
+  It appears top-level in the JSON from CLI --json and the web /api/parse
+  response via dataclasses.asdict. Additive — no existing field changes.
+- Schema 1.1.0 → 1.2.0 (additive: ParseResult.extraction_type), per the
+  "never change JSON schema without bumping schema_version" invariant.
+- Console summary line and web summary bar show the extraction type.
+- Package version 1.1.0 → 1.2.0 in pyproject.toml (new capability = MINOR).
+- Tests: tests/test_detect.py builds synthetic trees in tmp_path; no real case data.
+  Minimum 8: homedomain, appdomain, sms_db, knowledgec, addressbook, android_logical,
+  unknown, ios_priority_over_android; plus case_insensitive and parse_zip integration.
+- Tests: 55 → 65
 
 ## PACKAGING (PyInstaller)
 Spec: treska.spec (onefile, console=False, pathex=['src'])

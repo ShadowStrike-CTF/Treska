@@ -66,7 +66,7 @@ def main() -> None:
 
 
 def _to_dict(result: ParseResult) -> dict:
-    """ParseResult (a dataclass tree) -> plain dict matching the v1.1.0 JSON schema."""
+    """ParseResult (a dataclass tree) -> plain dict matching the v1.2.0 JSON schema."""
     return dataclasses.asdict(result)
 
 
@@ -84,7 +84,8 @@ def _pretty_print(result: ParseResult, *, verbose: bool = False) -> None:
 
     console.print(Text(f"Treska — {result.zip_path}", style="bold"))
     console.print(
-        f"schema {result.schema_version} · {result.file_count} files · "
+        f"schema {result.schema_version} · {result.extraction_type} · "
+        f"{result.file_count} files · "
         f"{len(result.flagged)} flagged · {len(sqlite_entries)} SQLite · "
         f"{len(evtx_entries)} EVTX · {len(result.deferred_files)} deferred · "
         f"{mismatches} magic mismatch"

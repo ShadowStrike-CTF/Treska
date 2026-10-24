@@ -138,6 +138,7 @@
   <section id="results" aria-live="polite">
     <div class="summary">
       <div class="name" id="r-name"></div>
+      <span class="stat"><b id="r-type"></b></span>
       <span class="stat"><b id="r-files"></b> files</span>
       <span class="stat" id="r-flagged-wrap"><b id="r-flagged"></b> flagged</span>
       <span class="stat"><b id="r-sqlite"></b> SQLite</span>
@@ -230,6 +231,7 @@
     const mismatches = r.inventory.filter((e) => e.mismatch).length;
 
     $("r-name").textContent = r.zip_path;
+    $("r-type").textContent = r.extraction_type || "UNKNOWN";
     $("r-files").textContent = r.file_count;
     $("r-flagged").textContent = r.flagged.length;
     $("r-sqlite").textContent = sqlite.length;

@@ -242,14 +242,14 @@ def test_parse_result_flagged_subset():
 
 
 def test_schema_version():
-    assert ParseResult().schema_version == "1.1.0"
+    assert ParseResult().schema_version == "1.2.0"
 
 
 # --- pipeline --------------------------------------------------------------
 
 def test_parse_zip_end_to_end():
     result = parse_zip(SAMPLE_ZIP)
-    assert result.schema_version == "1.1.0"
+    assert result.schema_version == "1.2.0"
     assert result.file_count == len(SAMPLE_MEMBERS)
     by_path = {e.path: e for e in result.inventory}
     assert set(by_path) == SAMPLE_MEMBERS

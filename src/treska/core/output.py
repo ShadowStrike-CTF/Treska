@@ -7,7 +7,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 # 1.1.0: added FileEntry.triage and ParseResult.deferred_files (additive).
-SCHEMA_VERSION = "1.1.0"
+# 1.2.0: added ParseResult.extraction_type (additive).
+SCHEMA_VERSION = "1.2.0"
 
 
 @dataclass
@@ -35,9 +36,13 @@ class ParseResult:
     flagged: list[FileEntry] = field(default_factory=list)
     inventory: list[FileEntry] = field(default_factory=list)
     deferred_files: list[dict] = field(default_factory=list)
+    # IOS_FFS / ANDROID_LOGICAL / UNKNOWN from core.detect.
+    extraction_type: str = "UNKNOWN"
 
 
-def build_parse_result(zip_path: str, entries: list[FileEntry]) -> ParseResult:
+def build_parse_result(
+    zip_path: str, entries: list[FileEntry], extraction_type: str = "UNKNOWN"
+) -> ParseResult:
     """inventory = all entries by path; flagged = the same objects with flags,
     most flags first (path breaks ties); deferred_files = containers to open
     with another tool first."""
@@ -52,4 +57,5 @@ def build_parse_result(zip_path: str, entries: list[FileEntry]) -> ParseResult:
             e.triage for e in inventory
             if e.triage is not None and e.triage.get("status") == "deferred"
         ],
+        extraction_type=extraction_type,
     )
