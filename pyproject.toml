@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "treska"
-version = "1.2.0"
+version = "1.2.1"
 description = "Fast forensic parser for zipped logical extractions in CTF competitions. by ShadowStrike."
 readme = "README.md"
 license = {text = "MIT"}
@@ -27,7 +27,7 @@ dependencies = [
     "python-evtx>=0.8.1",
 ]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "License :: OSI Approved :: MIT License",
