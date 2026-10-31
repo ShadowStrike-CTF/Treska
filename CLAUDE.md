@@ -95,6 +95,15 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
   Minimum 8: homedomain, appdomain, sms_db, knowledgec, addressbook, android_logical,
   unknown, ios_priority_over_android; plus case_insensitive and parse_zip integration.
 - Tests: 55 → 65
+- Status: COMPLETE — merged to main (ShadowStrike-CTF/Treska#7), tagged v1.2.0, on PyPI.
+
+## v1.2.1 — classifier fix (patch)
+- treska 1.2.0 shipped to PyPI with "Development Status :: 1 - Planning"; PyPI metadata
+  is immutable per release, so the fix needs a new version.
+- pyproject.toml classifier → "Development Status :: 3 - Alpha"
+- Package version 1.2.0 → 1.2.1 (metadata-only fix = PATCH)
+- No code or output change: JSON schema_version stays 1.2.0
+- Tests: 65 → 65 (no new tests)
 
 ## PACKAGING (PyInstaller)
 Spec: treska.spec (onefile, console=False, pathex=['src'])
