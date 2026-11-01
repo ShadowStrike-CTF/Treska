@@ -13,6 +13,7 @@ ingestion.py — zip extraction, temp dir (try/finally cleanup, --keep)
 magic_check.py — python-magic, mismatch detection
 inventory.py — file inventory (path, size, extension, zip timestamp)
 heuristics.py — 8 interesting-file flags
+hashing.py — MD5/SHA-256 per file (ThreadPoolExecutor > 100 files; --no-hash → None)
 sqlite_probe.py — SQLite schema extraction (magic bytes, not extension)
 output.py — ParseResult dataclass consumed by both CLI and web
 pipeline.py — parse_zip() entry point; triage_file() magic-byte dispatch (EVTX / deferred)
