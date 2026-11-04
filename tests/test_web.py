@@ -97,3 +97,8 @@ def test_cors_parse_with_sarissa_origin():
 def test_cors_rejects_other_origin():
     resp = client.get("/api/health", headers={"Origin": "http://evil.example"})
     assert "access-control-allow-origin" not in resp.headers
+
+
+def test_trusted_host_rejects_external():
+    response = client.get("/", headers={"Host": "evil.local"})
+    assert response.status_code == 400
