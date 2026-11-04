@@ -17,6 +17,7 @@ import uvicorn
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from treska.core.pipeline import parse_zip
 
@@ -33,6 +34,8 @@ def create_app() -> FastAPI:
     # Sarissa (7331) reads parse results from the browser. Loopback origins only; never "*".
     SARISSA_ORIGINS = ["http://127.0.0.1:7331", "http://localhost:7331"]
     app.add_middleware(CORSMiddleware, allow_origins=SARISSA_ORIGINS, allow_methods=["GET", "POST"])
+    # F02: outermost layer (added last = checked first). Loopback Host headers only.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     @app.get("/api/health")
     def health() -> dict:
