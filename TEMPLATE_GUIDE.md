@@ -16,10 +16,10 @@ These files are pre-built and ready to use — substitution only, no new content
 
 | File | What it does |
 |------|--------------|
-| `pyproject.toml` | hatchling build backend, MIT licence, Python 3.11 floor, 3.11 + 3.12 classifiers, src layout wheel target, GitHub source URL |
+| `pyproject.toml` | hatchling build backend, proprietary licence, Python 3.11 floor, 3.11 + 3.12 classifiers, src layout wheel target, GitHub source URL |
 | `src/PACKAGENAME/__init__.py` | Package entry point with copyright + motto header |
 | `README.md` | v1.6 format — one-liner, GitHub link, copyright footer, Aut Viam motto |
-| `LICENSE` | MIT licence — copyright holder "ShadowStrike" (no company identifier) |
+| `LICENSE` | Proprietary (all rights reserved) — copyright holder "ShadowStrike" (no company identifier) |
 | `.gitignore` | Standard Python ignores (dist/, build/, __pycache__, *.egg-info) |
 | `TEMPLATE_GUIDE.md` | This file |
 | `.github/workflows/publish.yml` | Trusted OIDC publishing — fires on `git tag v*` push |
@@ -49,9 +49,9 @@ These files are pre-built and ready to use — substitution only, no new content
 
 ```
 stub_template_v1_0_12/
-├── pyproject.toml               ← hatchling, src layout, MIT, 3.11 + 3.12 classifiers
+├── pyproject.toml               ← hatchling, src layout, Proprietary, 3.11 + 3.12 classifiers
 ├── README.md                    ← v1.6 format (GitHub link, one-liner, attribution, footer)
-├── LICENSE                      ← MIT
+├── LICENSE                      ← Proprietary (all rights reserved)
 ├── .gitignore
 ├── TEMPLATE_GUIDE.md            ← this file
 ├── src/
@@ -66,7 +66,7 @@ stub_template_v1_0_12/
 
 - Build backend: hatchling (Suite-wide — D stream and SA stream)
 - Package layout: src layout — `src/PACKAGENAME/`
-- Licence: MIT
+- Licence: Proprietary (all rights reserved)
 - Python floor: 3.11
 - Python classifiers (stubs): 3.11 + 3.12
 - Python classifiers (live SA tools): 3.11 only until PyInstaller 3.12 Windows verification done
@@ -96,6 +96,10 @@ git push origin v0.0.1
 - Internal-only notation rule formalised (BAC v1.20):
   must NOT appear in any externally visible content (GitHub README, PyPI descriptions,
   commit messages, or any public-facing output — any stream, including M Pumpkin)
+
+### F04 changes (4 Nov 2026)
+- Licence changed from MIT to Proprietary (all rights reserved) across the Megdan CTF line;
+  supersedes the B/1.1.37 MIT ruling below. MIT releases already on PyPI stay MIT
 
 ### v1.0.11 changes (B/1.1.37 — 27 Sep 2026)
 - Version reference updated to stub_template_v1_0_11
