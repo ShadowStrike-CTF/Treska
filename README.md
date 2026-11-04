@@ -6,5 +6,4 @@ GitHub: https://github.com/ShadowStrike-CTF/treska
 
 ---
 
-© 2026 ShadowStrike. All rights reserved.
-Aut Viam Inveniam Aut Faciam
+© 2026 ShadowStrike. All rights reserved. Aut Viam Inveniam Aut Faciam

@@ -1,6 +1,6 @@
 # Treska — Fast Forensic Parser
 Fast forensic parser for zipped logical extractions in CTF competitions.
-by ShadowStrike. MIT.
+by ShadowStrike. Proprietary — all rights reserved.
 
 ## Dual delivery mode
 CLI: treska challenge.zip [options]
@@ -114,3 +114,12 @@ Devnull guard: __main__.py redirects sys.stdout/stderr to devnull when None (win
 Build: pyinstaller treska.spec
 Output: dist/treska (Linux ELF)
 python-magic: hook-magic.py from pyinstaller-hooks-contrib handles it automatically.
+
+## F04 — licence: MIT → Proprietary
+- LICENSE: all rights reserved, no reproduction/distribution without ShadowStrike's written permission
+- pyproject: `license = {text = "Proprietary"}`, classifier `License :: Other/Proprietary License`
+- Every package .py carries `# © 2026 ShadowStrike. All rights reserved.` in its header
+  (vendored `_vendor/megdan_schema/` excluded — hash-pinned, never edited)
+- README footer: `© 2026 ShadowStrike. All rights reserved. Aut Viam Inveniam Aut Faciam`
+- MIT releases already on PyPI stay MIT; the proprietary licence applies from this version on
+- Version 1.2.1 → 1.3.0. No tag pushed
