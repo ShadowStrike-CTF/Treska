@@ -19,6 +19,12 @@ from treska.core.output import FileEntry, ParseResult
 from treska.core.pipeline import parse_zip
 
 _DASH = "—"
+# --out pretty output: fixed width, no colour, so the file is identical on any terminal.
+OUT_WIDTH = 120
+
+EXIT_NOT_FOUND = 1
+EXIT_PARSE_ERROR = 2
+EXIT_CANNOT_WRITE = 3
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -37,6 +43,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include per-file detail in pretty output",
     )
+    parser.add_argument(
+        "--out",
+        metavar="FILE",
+        help="Write all output to FILE; stdout shows only 'Written to: <path>'",
+    )
+    parser.add_argument(
+        "--no-hash",
+        action="store_true",
+        help="Skip MD5/SHA-256 (hash fields stay present: null in JSON, — in pretty)",
+    )
+    parser.add_argument(
+        "--keep",
+        action="store_true",
+        help="Keep the extracted temp dir; its path is printed to stderr",
+    )
     return parser
 
 
@@ -46,23 +67,60 @@ def main() -> None:
     path = Path(args.zip_path)
     if not path.is_file():
         print(f"treska: file not found: {args.zip_path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_NOT_FOUND)
     if not os.access(path, os.R_OK):
         print(f"treska: file unreadable: {args.zip_path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_NOT_FOUND)
 
+    # --keep: stderr is the diagnostic channel, so this never touches stdout (or --out).
+    on_extract = (lambda d: print(f"Kept: {d}", file=sys.stderr)) if args.keep else None
+
+    # Parse first: a parse error must never create or truncate the --out file.
     try:
-        result = parse_zip(path)
+        result = parse_zip(path, keep=args.keep, no_hash=args.no_hash, on_extract=on_extract)
     except Exception as exc:  # noqa: BLE001
         print(f"treska: parse error: {exc}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_PARSE_ERROR)
 
-    if args.json:
-        # Plain print, not rich: JSON must reach Sarissa byte-for-byte.
-        # default=str guards against any future non-JSON field (Path, datetime).
-        print(json.dumps(_to_dict(result), indent=2, default=str))
+    if args.out:
+        final = Path(args.out).resolve()
+        try:
+            _write_out(result, final, as_json=args.json, verbose=args.verbose)
+        except OSError as exc:
+            print(f"treska: cannot write output: {final}: {exc.strerror or exc}", file=sys.stderr)
+            sys.exit(EXIT_CANNOT_WRITE)
+        # Plain print, not rich: the only stdout line when --out is set.
+        print(f"Written to: {final}")
+    elif args.json:
+        # Plain write, not rich: JSON must reach Sarissa byte-for-byte.
+        sys.stdout.write(_render_json(result))
     else:
-        _pretty_print(result, verbose=args.verbose)
+        _pretty_print(result, Console(highlight=False), verbose=args.verbose)
+
+
+def _render_json(result: ParseResult) -> str:
+    # default=str guards against any future non-JSON field (Path, datetime).
+    return json.dumps(_to_dict(result), indent=2, default=str) + "\n"
+
+
+def _write_out(result: ParseResult, final: Path, *, as_json: bool, verbose: bool) -> None:
+    """Write to <final>.partial beside it, then os.replace onto final: a crash
+    mid-write never leaves a half-written file at the final path."""
+    partial = final.with_name(final.name + ".partial")
+    try:
+        # newline="" so the bytes match stdout exactly on every platform.
+        with open(partial, "w", encoding="utf-8", newline="") as fh:
+            if as_json:
+                fh.write(_render_json(result))
+            else:
+                console = Console(
+                    file=fh, force_terminal=False, color_system=None,
+                    width=OUT_WIDTH, highlight=False,
+                )
+                _pretty_print(result, console, verbose=verbose)
+        os.replace(partial, final)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _to_dict(result: ParseResult) -> dict:
@@ -74,10 +132,10 @@ def _or_dash(value: object) -> str:
     return _DASH if value is None else str(value)
 
 
-def _pretty_print(result: ParseResult, *, verbose: bool = False) -> None:
+def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = False) -> None:
     """Rich summary: counts, flagged files, SQLite schemas, EVTX triage, deferred
-    containers; verbose adds full inventory."""
-    console = Console(highlight=False)
+    containers; verbose adds full inventory. The caller picks the Console
+    (terminal or --out file) so there is exactly one renderer."""
     sqlite_entries = [e for e in result.inventory if e.sqlite_schema is not None]
     evtx_entries = [e for e in result.inventory if e.triage and e.triage.get("format") == "evtx"]
     mismatches = sum(1 for e in result.inventory if e.mismatch)
