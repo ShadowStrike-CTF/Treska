@@ -43,7 +43,7 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - --no-hash: hash columns always present, render as — (console/file) or null (JSON)
 - ThreadPoolExecutor only — NEVER ProcessPoolExecutor
 - Temp dir: ALWAYS cleaned on exit, even on error (try/finally)
-- JSON schema: stable at v1.3.0, schema_version field in every output
+- JSON schema: stable at v1.4.0, schema_version field in every output
 
 ## WHAT NOT TO DO
 - Never duplicate parsing logic between cli.py and web/main.py
@@ -320,6 +320,40 @@ extraction_type — a breaking schema change, out of scope.
   CONTRACT["1.4.0"] added to tests/test_contract.py; CONTRACT["1.2.0"] and
   CONTRACT["1.3.0"] kept unchanged.
 - Package version 1.5.0 → 1.6.0 (new capability = MINOR)
+
+sqlite_triage.py extensions (Phase 10 reuse — moved out of ios.py, no behaviour change):
+`Schema`, `Body`, `has`, `need_column`, `count_table`, `fetch_rows`, `triage_sqlite`
+(the shared open → required-tables → body → status frame), and `epoch_to_iso(epoch,
+seconds)` (shared ISO formatting + None/blob/0/NaN/overflow guards). ios.py's
+`apple_to_iso` and android.py's `unix_ms_to_iso` / `unix_s_to_iso` all call
+`epoch_to_iso`; ios.py public names unchanged.
+
+Pipeline: `_ios_triage` generalised to `_artifact_triage(artifacts, ...)`, picked from
+`DEVICE_ARTIFACTS = {IOS_FFS: IOS_ARTIFACTS, ANDROID_LOGICAL: ANDROID_ARTIFACTS}`.
+Output: CLI `_print_device(console, triage, platform)` (was `_print_ios`) renders both
+platforms; summary line adds `N Android`. Web `renderDevice()` backs `renderIos()` and
+`renderAndroid()` (el()/textContent only); summary bar adds the Android count.
+
+Contract: `_check_contract(data, version=...)` can pin an older CONTRACT entry.
+`test_contract_1_3_0` now checks iOS output against BOTH the unchanged
+CONTRACT["1.3.0"] shapes and the current contract (the live schema_version is 1.4.0).
+Android shapes add "objects" (embedded_calls) and "count_maps" (by_type,
+embedded_calls.types → every value int).
+
+- Tests: 98 collected (97 passed + Poligon module skipped) → 112 collected (111 passed +
+  Poligon module skipped). 14 new: 13 in tests/test_phase10_android.py (synthetic DBs in
+  tmp_path with real AOSP table/column names), 1 in tests/test_contract.py
+  (test_contract_1_4_0). Literal schema "1.3.0" assertions in test_cli.py, test_web.py,
+  test_core.py bumped to "1.4.0".
+- Fixture: tests/fixtures/android_sample.zip (regenerate with
+  python tests/fixtures/make_android_fixture.py; reuses make_db / zip_tree from
+  make_ios_fixture.py) — mmssms.db and contacts2.db ship uncheckpointed -wal/-shm so the
+  WAL path runs end to end; contacts2.db carries the embedded calls table. Used by the
+  contract test and the G.0 smoke gate.
+
+OPEN ITEM: Android template for Poligon — candidate for future Poligon phase. Poligon
+had no Android logical template at M/1.1.13 recon, so Phase 10 has synthetic tests only
+(no tests/integration/test_poligon_android.py).
 
 WHAT NOT TO DO (Phase 10):
 - Never copy-paste Phase 9 helpers into android.py — extend sqlite_triage.py instead

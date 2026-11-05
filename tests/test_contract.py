@@ -27,6 +27,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SRC = Path(__file__).resolve().parent.parent / "src"
 SAMPLE_ZIP = FIXTURES / "sample.zip"
 IOS_ZIP = FIXTURES / "ios_sample.zip"
+ANDROID_ZIP = FIXTURES / "android_sample.zip"
 
 CONTRACT: dict[str, dict[str, dict[str, object]]] = {
     "1.2.0": {
@@ -136,6 +137,76 @@ CONTRACT["1.3.0"] = {
     },
 }
 
+# 1.4.0 (Phase 10): additive — everything in 1.3.0 unchanged, plus three Android
+# formats with the same 9-key triage dict. "objects" pins nested summary objects
+# (when not null); "count_maps" names summary maps of {label: int}.
+_SQLITE_TRIAGE = _IOS_TRIAGE
+CONTRACT["1.4.0"] = {
+    **{key: dict(shape) for key, shape in CONTRACT["1.3.0"].items()},
+    "triage": {
+        **CONTRACT["1.3.0"]["triage"],
+        "android_mmssms": {
+            "triage": _SQLITE_TRIAGE,
+            "summary": {
+                "total": int | None,
+                "inbox": int | None,
+                "sent": int | None,
+                "other": int | None,
+                "mms_count": int,
+                "address_count": int | None,
+                "first_message": str | None,
+                "last_message": str | None,
+                "first_mms": str | None,
+                "last_mms": str | None,
+            },
+            "sample": {
+                "time": str | None,
+                "direction": str | None,
+                "address": str | None,
+                "body": str | None,
+            },
+            "items": {},
+        },
+        "android_contacts": {
+            "triage": _SQLITE_TRIAGE,
+            "summary": {
+                "raw_contact_count": int | None,
+                "contact_count": int | None,
+                "phone_count": int | None,
+                "email_count": int | None,
+                "embedded_calls": dict | None,
+            },
+            "sample": {
+                "display_name": str | None,
+                "first_phone_or_email": str | None,
+            },
+            "items": {},
+            "objects": {
+                "embedded_calls": {"count": int | None, "types": dict | None},
+            },
+            "count_maps": ("embedded_calls.types",),
+        },
+        "android_calllog": {
+            "triage": _SQLITE_TRIAGE,
+            "summary": {
+                "total": int | None,
+                "by_type": dict | None,
+                "total_duration_seconds": int | None,
+                "first_call": str | None,
+                "last_call": str | None,
+            },
+            "sample": {
+                "time": str | None,
+                "type": str | None,
+                "number": str | None,
+                "duration_seconds": int | None,
+            },
+            "items": {},
+            "count_maps": ("by_type",),
+        },
+    },
+}
+
 
 def _allowed(spec: object) -> tuple[type, ...]:
     # `T | None` -> (T, NoneType); a bare type -> (T,).
@@ -166,14 +237,29 @@ def _check_triage(triage: dict, shape: dict, where: str) -> None:
         for key, item_shape in shape["items"].items():
             for j, item in enumerate(summary[key] or []):
                 _check(item, item_shape, f"{where}.summary.{key}[{j}]")
+        for key, obj_shape in shape.get("objects", {}).items():
+            if summary[key] is not None:
+                _check(summary[key], obj_shape, f"{where}.summary.{key}")
+        for dotted in shape.get("count_maps", ()):
+            value: object = summary
+            for part in dotted.split("."):
+                value = value.get(part) if isinstance(value, dict) else None
+            for label, count in (value or {}).items():
+                assert type(label) is str and type(count) is int, (
+                    f"{where}.summary.{dotted}[{label!r}]: {type(count).__name__} not int")
     for j, sample in enumerate(triage["samples"]):
         _check(sample, shape["sample"], f"{where}.samples[{j}]")
 
 
 def _check_contract(
-    data: dict, *, expect_deferred: bool = False, expect_formats: frozenset[str] = frozenset()
+    data: dict,
+    *,
+    version: str | None = None,
+    expect_deferred: bool = False,
+    expect_formats: frozenset[str] = frozenset(),
 ) -> None:
-    contract = CONTRACT[data["schema_version"]]
+    # version pins an older CONTRACT entry: additive bumps keep older shapes valid.
+    contract = CONTRACT[version or data["schema_version"]]
     _check(data, contract["result"], "result")
     triage_shapes = contract.get("triage", {})
     seen: set[str] = set()
@@ -247,14 +333,42 @@ IOS_FORMATS = frozenset({"ios_sms", "ios_knowledgec", "ios_addressbook"})
 
 def test_contract_1_3_0():
     """Phase 9: CLI and web output for an iOS FFS zip match CONTRACT["1.3.0"],
-    including every iOS triage, summary and sample shape."""
+    including every iOS triage, summary and sample shape. Since 1.4.0 is additive,
+    the iOS output must still match the unchanged 1.3.0 shapes as well as the
+    current contract."""
     assert "1.3.0" in CONTRACT and "1.2.0" in CONTRACT
     for data in (_cli_json(IOS_ZIP), _web_json(IOS_ZIP)):
-        assert data["schema_version"] == "1.3.0"
+        assert data["schema_version"] == SCHEMA_VERSION
         assert data["extraction_type"] == "IOS_FFS"
+        _check_contract(data, version="1.3.0", expect_formats=IOS_FORMATS)
         _check_contract(data, expect_formats=IOS_FORMATS)
         statuses = {
             e["triage"]["format"]: e["triage"]["status"]
             for e in data["inventory"] if e["triage"] is not None
         }
         assert statuses == dict.fromkeys(IOS_FORMATS, "parsed")
+
+
+ANDROID_FORMATS = frozenset({"android_mmssms", "android_contacts", "android_calllog"})
+
+
+def test_contract_1_4_0():
+    """Phase 10: CLI and web output for an Android logical zip match CONTRACT["1.4.0"],
+    including every Android triage, summary, sample, nested object and count map."""
+    assert {"1.2.0", "1.3.0", "1.4.0"} <= set(CONTRACT)
+    # Additive: every 1.3.0 shape is carried into 1.4.0 unchanged.
+    for key, shape in CONTRACT["1.3.0"].items():
+        if key != "triage":
+            assert CONTRACT["1.4.0"][key] == shape
+    for fmt, shape in CONTRACT["1.3.0"]["triage"].items():
+        assert CONTRACT["1.4.0"]["triage"][fmt] is shape
+    for data in (_cli_json(ANDROID_ZIP), _web_json(ANDROID_ZIP)):
+        assert data["schema_version"] == "1.4.0"
+        assert data["extraction_type"] == "ANDROID_LOGICAL"
+        _check_contract(data, expect_formats=ANDROID_FORMATS)
+        triages = {e["triage"]["format"]: e["triage"]
+                   for e in data["inventory"] if e["triage"] is not None}
+        assert {f: t["status"] for f, t in triages.items()} == dict.fromkeys(ANDROID_FORMATS, "parsed")
+        # The fixture's contacts2.db carries the embedded calls table: the nested
+        # object and its count map are exercised, not just allowed to be null.
+        assert triages["android_contacts"]["summary"]["embedded_calls"] is not None

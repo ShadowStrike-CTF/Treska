@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from treska.core.detect import IOS_FFS, UNKNOWN, detect_extraction_type
+from treska.core.detect import ANDROID_LOGICAL, IOS_FFS, UNKNOWN, detect_extraction_type
 from treska.core.hashing import compute_hashes
 from treska.core.heuristics import flag_file
 from treska.core.ingestion import cleanup, extract
@@ -15,6 +15,7 @@ from treska.core.inventory import build_inventory
 from treska.core.magic_check import check_magic
 from treska.core.output import FileEntry, ParseResult, build_parse_result
 from treska.core.sqlite_probe import is_sqlite, probe_sqlite
+from treska.parsers.android import ANDROID_ARTIFACTS
 from treska.parsers.evtx import EVTX_MAGIC, parse_evtx
 from treska.parsers.ios import IOS_ARTIFACTS
 from treska.parsers.sqlite_triage import result_skeleton
@@ -51,13 +52,27 @@ def _deferred(path: str, fmt: str, message: str) -> dict:
     }
 
 
-def _ios_triage(file_path: Path, path: str, work_dir: Path | None) -> dict | None:
-    """iOS artifact triage by casefolded filename, gated on the SQLite header.
+# extraction_type -> its artifact dispatch table. One value per extraction, so the
+# iOS and Android tables are mutually exclusive (iOS wins detection — Phase 10 limitation).
+DEVICE_ARTIFACTS: dict[str, dict[str, tuple[str, Callable[..., dict]]]] = {
+    IOS_FFS: IOS_ARTIFACTS,
+    ANDROID_LOGICAL: ANDROID_ARTIFACTS,
+}
+
+
+def _artifact_triage(
+    artifacts: dict[str, tuple[str, Callable[..., dict]]],
+    file_path: Path,
+    path: str,
+    work_dir: Path | None,
+) -> dict | None:
+    """Device artifact triage (iOS or Android) by casefolded filename, gated on
+    the SQLite header.
 
     A known name without the header is reported corrupt, never skipped; a parser
     exception becomes status "corrupt" so nothing escapes parse_zip.
     """
-    known = IOS_ARTIFACTS.get(Path(path).name.casefold())
+    known = artifacts.get(Path(path).name.casefold())
     if known is None:
         return None
     fmt, parser = known
@@ -83,7 +98,8 @@ def triage_file(
 
     EVTX -> parse_evtx dict; forensic container -> status "deferred"; in an
     IOS_FFS tree, sms.db / KnowledgeC.db / AddressBook.sqlitedb -> iOS triage
-    dict; else None. A ".evtx" without the ElfFile header still goes to
+    dict; in an ANDROID_LOGICAL tree, mmssms.db / contacts2.db / calllog.db ->
+    Android triage dict; else None. A ".evtx" without the ElfFile header still goes to
     parse_evtx so it is reported as corrupt rather than silently skipped.
     work_dir is where WAL copies are staged (the parse temp dir).
     """
@@ -101,8 +117,9 @@ def triage_file(
         return parse_evtx(head, filename=path)
     if extension in DEFERRED_EXTENSIONS and mime == _UNIDENTIFIED_MIME:
         return _deferred(path, extension, DEFERRED_EXTENSIONS[extension])
-    if extraction_type == IOS_FFS:
-        return _ios_triage(file_path, path, work_dir)
+    artifacts = DEVICE_ARTIFACTS.get(extraction_type)
+    if artifacts is not None:
+        return _artifact_triage(artifacts, file_path, path, work_dir)
     return None
 
 
@@ -127,7 +144,7 @@ def parse_zip(
     try:
         if on_extract is not None:
             on_extract(temp_dir)
-        # Detect first: per-file triage (iOS artifacts) depends on it. Runs
+        # Detect first: per-file triage (iOS / Android artifacts) depends on it. Runs
         # before any WAL copy is staged under temp_dir, so it sees evidence only.
         extraction_type = detect_extraction_type(temp_dir)
         rows = build_inventory(files, zip_path, root=temp_dir)
