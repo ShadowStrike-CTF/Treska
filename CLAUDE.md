@@ -183,3 +183,73 @@ WHAT NOT TO DO (Phase 8):
 - Never write `--out` directly to the final path (use .partial + os.replace)
 - Never expose `--keep` in the web UI
 - Never add jsonschema or any test/runtime dependency for the contract test
+
+## Phase 9 (v1.5.0) — iOS FFS artifact triage
+Read-only triage of the three key iOS databases, gated on extraction_type == IOS_FFS.
+Results land on FileEntry.triage (same slot as EVTX), so CLI, web and Sarissa all get
+them through parse_zip() — no iOS logic in cli.py or web/main.py.
+
+New triage.format values:
+- `ios_sms` — sms.db (required tables: message, handle, chat; attachment optional)
+  summary: message_count, sent_count, received_count, chat_count, handle_count,
+  attachment_count, first_message, last_message
+  samples: ≤ SAMPLE_CAP most-recent messages {time, direction, handle, text}
+- `ios_knowledgec` — KnowledgeC.db (required table: ZOBJECT)
+  summary: total_rows, stream_counts [{stream, count}] (top TOP_N by ZSTREAMNAME),
+  top_bundles [{bundle_id, count}] (top TOP_N /app/usage), first_event, last_event
+  samples: ≤ SAMPLE_CAP most-recent /app/usage rows {bundle_id, start, end}
+- `ios_addressbook` — AddressBook.sqlitedb (required table: ABPerson; ABMultiValue optional)
+  summary: person_count, phone_count, email_count
+  samples: ≤ SAMPLE_CAP persons {first_name, last_name, organization, first_phone_or_email}
+
+Every iOS triage dict has the same key set (exact-key contract): filename, format,
+status, error, warnings, wal_present, wal_applied, summary, samples.
+- status: `corrupt` = can't open as SQLite OR none of the required tables exist
+  (summary null); `empty` = required tables present, zero rows; `parsed` otherwise.
+- Missing optional table/column → `warnings` entry and that key → null.
+- Times: apple_to_iso() — Cocoa epoch (seconds since 2001-01-01 UTC); values > 1e11 are
+  nanoseconds (iOS 11+); 0/None → null. Output `YYYY-MM-DDTHH:MM:SSZ`.
+
+Files:
+- src/treska/parsers/sqlite_triage.py — shared helpers for ios.py (Phase 9) and
+  android.py (Phase 10). Constants SAMPLE_CAP = 3, TEXT_CAP = 200, TOP_N = 10.
+  open_readonly (mode=ro&immutable=1), table_columns, safe_count, result_skeleton,
+  truncate, WAL staging. Everything reusable lives here, not in ios.py.
+- src/treska/parsers/ios.py — `IOS_ARTIFACTS` dispatch table keyed by casefolded
+  filename → (format, parser): sms.db, knowledgec.db, addressbook.sqlitedb.
+- Pipeline reorder: detect_extraction_type(temp_dir) now runs right after extract(),
+  before the per-file triage loop, and its result is passed to triage_file(). detect.py
+  itself is unchanged. The iOS branch sits after the EVTX/deferred checks (magic still
+  wins) and checks the SQLite header (core.sqlite_probe.is_sqlite) before dispatch.
+- Output: CLI `_print_ios(console, triage)` beside `_print_evtx`; web `renderIos()`
+  (el()/textContent only).
+
+WAL handling (Option A — locked M/1.1.13):
+- If `<name>-wal` sits beside the DB: copy db + -wal + -shm (if present) to
+  `temp_dir/.treska_wal/<uuid8>/`, open the COPY (no immutable — SQLite replays the WAL),
+  triage gets `wal_present: true, wal_applied: true`.
+- No WAL: open the original with mode=ro&immutable=1, `wal_present: false, wal_applied: false`.
+- Copy/open of the copy fails → fall back to the original (immutable), wal_applied false
+  + warning.
+- Originals are never opened read-write and never modified. Hashes are computed on the
+  originals before any WAL copy. .treska_wal/ lives under temp_dir, so the existing
+  cleanup removes it (with --keep it stays in the kept dir).
+
+- Schema 1.2.0 → 1.3.0 (additive: new triage.format values and their shapes).
+  CONTRACT["1.3.0"] added to tests/test_contract.py; CONTRACT["1.2.0"] kept unchanged.
+- Package version 1.4.0 → 1.5.0 (new capability = MINOR)
+- Tests: baseline 82 collected (81 passed + Poligon integration module skipped —
+  the Phase 8 line above says 83; that count is drift) → +15 (tests/test_phase9_ios.py
+  synthetic DBs in tmp_path with real iOS table/column names; test_contract_1_3_0)
+
+WHAT NOT TO DO (Phase 9):
+- Never open evidence read-write
+- Never dispatch on extension alone without SQLite header check
+- Never dump full tables or blobs — SAMPLE_CAP and TEXT_CAP apply
+- Never let a parser exception escape `parse_zip`
+- Never put iOS logic in `cli.py` or `web/main.py`
+- Never render sample text with innerHTML
+- Never add a third-party dependency (sqlite3 is stdlib)
+- Never remove or rename existing triage keys or EVTX formats
+- Never change `detect.py` markers or logic — only its call position moves
+- Never use ProcessPoolExecutor
