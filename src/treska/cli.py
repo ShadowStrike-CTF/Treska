@@ -133,15 +133,13 @@ def _or_dash(value: object) -> str:
 
 
 def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = False) -> None:
-    """Rich summary: counts, flagged files, SQLite schemas, EVTX triage, iOS
-    artifact triage, deferred containers; verbose adds full inventory. The caller picks the Console
+    """Rich summary: counts, flagged files, SQLite schemas, EVTX triage, iOS and
+    Android artifact triage, deferred containers; verbose adds full inventory. The caller picks the Console
     (terminal or --out file) so there is exactly one renderer."""
     sqlite_entries = [e for e in result.inventory if e.sqlite_schema is not None]
     evtx_entries = [e for e in result.inventory if e.triage and e.triage.get("format") == "evtx"]
-    ios_entries = [
-        e for e in result.inventory
-        if e.triage and str(e.triage.get("format", "")).startswith("ios_")
-    ]
+    ios_entries = _device_entries(result, "ios_")
+    android_entries = _device_entries(result, "android_")
     mismatches = sum(1 for e in result.inventory if e.mismatch)
 
     console.print(Text(f"Treska — {result.zip_path}", style="bold"))
@@ -150,6 +148,7 @@ def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = Fals
         f"{result.file_count} files · "
         f"{len(result.flagged)} flagged · {len(sqlite_entries)} SQLite · "
         f"{len(evtx_entries)} EVTX · {len(ios_entries)} iOS · "
+        f"{len(android_entries)} Android · "
         f"{len(result.deferred_files)} deferred · "
         f"{mismatches} magic mismatch"
     )
@@ -182,7 +181,10 @@ def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = Fals
         _print_evtx(console, entry.triage)
 
     for entry in ios_entries:
-        _print_ios(console, entry.triage)
+        _print_device(console, entry.triage, "iOS")
+
+    for entry in android_entries:
+        _print_device(console, entry.triage, "Android")
 
     for deferred in result.deferred_files:
         console.print(Text(f"Deferred: {deferred['filename']} ({deferred['format']})", style="bold yellow"))
@@ -210,9 +212,17 @@ def _print_evtx(console: Console, triage: dict) -> None:
             console.print(Text(f"    {sample['time_created']} {sample['computer']} {data}".rstrip()))
 
 
-def _ios_value(value: object) -> str:
+def _device_entries(result: ParseResult, prefix: str) -> list[FileEntry]:
+    return [
+        e for e in result.inventory
+        if e.triage and str(e.triage.get("format", "")).startswith(prefix)
+    ]
+
+
+def _device_value(value: object) -> str:
     """Summary value -> text. Ranked lists ([{stream|bundle_id, count}]) render
-    as "label×count, ..."; None renders as —."""
+    as "label×count, ..."; count maps ({label: count}) as "label×count, ...",
+    nested maps in parentheses; None renders as —."""
     if isinstance(value, list):
         if not value:
             return "(none)"
@@ -221,12 +231,20 @@ def _ios_value(value: object) -> str:
             label = next((v for k, v in item.items() if k != "count"), None)
             parts.append(f"{_or_dash(label)}×{item.get('count')}")
         return ", ".join(parts)
+    if isinstance(value, dict):
+        if not value:
+            return "(none)"
+        return ", ".join(
+            f"{k} ({_device_value(v)})" if isinstance(v, dict) else f"{k}×{_or_dash(v)}"
+            for k, v in value.items()
+        )
     return _or_dash(value)
 
 
-def _print_ios(console: Console, triage: dict) -> None:
+def _print_device(console: Console, triage: dict, platform: str) -> None:
+    """One iOS / Android SQLite artifact triage block (same 9-key shape)."""
     # Every value below comes from the evidence (CTF-controlled): Text(), never markup.
-    header = Text(f"iOS {triage['format']}: {triage['filename']}", style="bold")
+    header = Text(f"{platform} {triage['format']}: {triage['filename']}", style="bold")
     header.append(f"  {triage['status']}")
     if triage.get("wal_present"):
         header.append(" · WAL applied" if triage.get("wal_applied") else " · WAL present, not applied")
@@ -236,7 +254,7 @@ def _print_ios(console: Console, triage: dict) -> None:
     for warning in triage.get("warnings") or []:
         console.print(Text(f"  warning: {warning}", style="yellow"))
     for key, value in (triage.get("summary") or {}).items():
-        console.print(Text(f"  {key}: {_ios_value(value)}"))
+        console.print(Text(f"  {key}: {_device_value(value)}"))
     for sample in triage.get("samples") or []:
         console.print(Text("    " + " · ".join(f"{k}={_or_dash(v)}" for k, v in sample.items())))
 

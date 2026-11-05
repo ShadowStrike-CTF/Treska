@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import sqlite3
 import tempfile
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,13 @@ TOP_N = 10       # max entries in any ranked list
 
 # WAL copies live here, under the parse temp dir, so the normal cleanup removes them.
 WAL_DIR = ".treska_wal"
+
+ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+# Casefolded {table: {column, ...}} from folded_schema().
+Schema = dict[str, set[str]]
+# A per-artifact body: (conn, schema, triage) -> (summary, samples, total_rows).
+Body = Callable[[sqlite3.Connection, Schema, dict[str, Any]], tuple[dict[str, Any], list[dict], int]]
 
 
 def open_readonly(path: Path) -> sqlite3.Connection:
@@ -183,3 +192,93 @@ def open_evidence(
         finally:
             # Close before the ExitStack removes any private temp dir (Windows).
             conn.close()
+
+
+def epoch_to_iso(epoch: datetime, seconds: Any) -> str | None:
+    """epoch + seconds -> ISO 8601 UTC ("YYYY-MM-DDTHH:MM:SSZ").
+
+    The caller fixes the unit (it converts to seconds before calling); this never
+    guesses. None, blobs, non-numbers, 0, NaN/inf and out-of-range values -> None.
+    """
+    if seconds is None or isinstance(seconds, (bytes, bytearray, memoryview)):
+        return None
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if seconds == 0 or not math.isfinite(seconds):
+        return None
+    try:
+        return (epoch + timedelta(seconds=seconds)).strftime(ISO_FORMAT)
+    except (OverflowError, ValueError):
+        return None
+
+
+def has(schema: Schema, table: str, column: str | None = None) -> bool:
+    """True if table (and column, if given) exists — case-insensitively."""
+    cols = schema.get(table.casefold())
+    if cols is None:
+        return False
+    return column is None or column.casefold() in cols
+
+
+def need_column(schema: Schema, triage: dict[str, Any], table: str, column: str) -> bool:
+    """True if table.column exists; else record a warning (table assumed present)."""
+    if has(schema, table, column):
+        return True
+    warn(triage, f"missing column {table}.{column}")
+    return False
+
+
+def count_table(conn: sqlite3.Connection, schema: Schema, table: str) -> int | None:
+    """COUNT(*) of table, or None when the table is absent or unreadable."""
+    if not has(schema, table):
+        return None
+    return safe_count(conn, f'SELECT COUNT(*) FROM "{table}"')
+
+
+def fetch_rows(conn: sqlite3.Connection, triage: dict[str, Any], sql: str,
+               params: tuple = ()) -> list[tuple]:
+    """All rows of sql, or [] plus a warning on sqlite3.Error."""
+    try:
+        return conn.execute(sql, params).fetchall()
+    except sqlite3.Error as exc:
+        warn(triage, f"query failed ({type(exc).__name__}: {exc})")
+        return []
+
+
+def triage_sqlite(
+    path: Path,
+    filename: str,
+    fmt: str,
+    required: tuple[str, ...],
+    body: Body,
+    work_dir: Path | None,
+) -> dict[str, Any]:
+    """Shared frame for every SQLite artifact (iOS and Android): open (WAL-aware,
+    read-only), check required tables, run body.
+
+    status: corrupt = can't open / none of the required tables exist;
+    empty = body reports zero rows; parsed otherwise. Never raises.
+    """
+    triage = result_skeleton(filename, fmt)
+    try:
+        with open_evidence(Path(path), work_dir, triage) as conn:
+            schema = folded_schema(conn)
+            present = [t for t in required if has(schema, t)]
+            if not present:
+                triage["status"] = "corrupt"
+                triage["error"] = "none of the required tables exist: " + ", ".join(required)
+                return triage
+            for table in required:
+                if table not in present:
+                    warn(triage, f"missing table {table}")
+            summary, samples, total_rows = body(conn, schema, triage)
+    except Exception as exc:  # noqa: BLE001 — never let a parser exception escape
+        triage.update(status="corrupt", summary=None, samples=[],
+                      error=f"{type(exc).__name__}: {exc}")
+        return triage
+    triage["summary"] = summary
+    triage["samples"] = samples[:SAMPLE_CAP]
+    triage["status"] = "empty" if total_rows == 0 else "parsed"
+    return triage

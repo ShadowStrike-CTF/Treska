@@ -144,6 +144,7 @@
       <span class="stat"><b id="r-sqlite"></b> SQLite</span>
       <span class="stat"><b id="r-evtx"></b> EVTX</span>
       <span class="stat"><b id="r-ios"></b> iOS</span>
+      <span class="stat"><b id="r-android"></b> Android</span>
       <span class="stat" id="r-deferred-wrap"><b id="r-deferred"></b> deferred</span>
       <span class="stat" id="r-mismatch-wrap"><b id="r-mismatch"></b> magic mismatch</span>
       <span class="schema" id="r-schema"></span>
@@ -161,6 +162,9 @@
 
     <h2>iOS artifacts <span class="count" id="ios-count"></span></h2>
     <div id="ios"></div>
+
+    <h2>Android artifacts <span class="count" id="android-count"></span></h2>
+    <div id="android"></div>
 
     <h2>Deferred containers <span class="count" id="deferred-count"></span></h2>
     <div id="deferred"></div>
@@ -231,7 +235,9 @@
   function render(r) {
     const sqlite = r.inventory.filter((e) => e.sqlite_schema !== null);
     const evtx = r.inventory.filter((e) => e.triage && e.triage.format === "evtx");
-    const ios = r.inventory.filter((e) => e.triage && String(e.triage.format || "").startsWith("ios_"));
+    const device = (prefix) => r.inventory.filter((e) => e.triage && String(e.triage.format || "").startsWith(prefix));
+    const ios = device("ios_");
+    const android = device("android_");
     const deferred = r.deferred_files || [];
     const mismatches = r.inventory.filter((e) => e.mismatch).length;
 
@@ -242,6 +248,7 @@
     $("r-sqlite").textContent = sqlite.length;
     $("r-evtx").textContent = evtx.length;
     $("r-ios").textContent = ios.length;
+    $("r-android").textContent = android.length;
     $("r-deferred").textContent = deferred.length;
     $("r-mismatch").textContent = mismatches;
     $("r-schema").textContent = "schema " + r.schema_version;
@@ -253,6 +260,7 @@
     renderSqlite(sqlite);
     renderEvtx(evtx.map((e) => e.triage));
     renderIos(ios.map((e) => e.triage));
+    renderAndroid(android.map((e) => e.triage));
     renderDeferred(deferred);
     renderInventory(r.inventory);
     results.classList.add("show");
@@ -320,8 +328,9 @@
     }));
   }
 
-  // Ranked lists ([{stream|bundle_id, count}]) -> "label×count, ..."; null -> —.
-  function iosValue(v) {
+  // Ranked lists ([{stream|bundle_id, count}]) and count maps ({label: count})
+  // -> "label×count, ..."; nested maps in parentheses; null -> —.
+  function deviceValue(v) {
     if (Array.isArray(v)) {
       if (!v.length) return "(none)";
       return v.map((item) => {
@@ -329,21 +338,30 @@
         return orDash(label ? label[1] : null) + "×" + item.count;
       }).join(", ");
     }
+    if (v !== null && typeof v === "object") {
+      const entries = Object.entries(v);
+      if (!entries.length) return "(none)";
+      return entries.map(([k, x]) => (x !== null && typeof x === "object")
+        ? k + " (" + deviceValue(x) + ")" : k + "×" + orDash(x)).join(", ");
+    }
     return orDash(v);
   }
 
-  // Message bodies, handles and bundle IDs are attacker-controlled CTF content:
-  // el()/textContent only, never parsed as HTML.
-  function renderIos(items) {
-    $("ios-count").textContent = "(" + items.length + ")";
-    const box = $("ios");
-    if (!items.length) { box.replaceChildren(el("p", { class: "muted", text: "No iOS artifacts." })); return; }
+  function renderIos(items) { renderDevice("ios", items, "No iOS artifacts."); }
+  function renderAndroid(items) { renderDevice("android", items, "No Android artifacts."); }
+
+  // Message bodies, numbers, handles and bundle IDs are attacker-controlled CTF
+  // content: el()/textContent only, never parsed as HTML.
+  function renderDevice(id, items, emptyText) {
+    $(id + "-count").textContent = "(" + items.length + ")";
+    const box = $(id);
+    if (!items.length) { box.replaceChildren(el("p", { class: "muted", text: emptyText })); return; }
     box.replaceChildren(...items.map((t) => {
       let status = t.format + " · " + t.status;
       if (t.wal_present) status += t.wal_applied ? " · WAL applied" : " · WAL present, not applied";
       if (t.error) status += " · " + t.error;
       const summary = Object.entries(t.summary || {}).map(([k, v]) =>
-        el("div", { class: "cols", text: k + ": " + iosValue(v) }));
+        el("div", { class: "cols", text: k + ": " + deviceValue(v) }));
       const warnings = (t.warnings || []).map((w) => el("div", { class: "muted", text: "warning: " + w }));
       const samples = (t.samples || []).map((s) => el("li", { text:
         Object.entries(s).map(([k, v]) => k + "=" + orDash(v)).join(" · ") }));
