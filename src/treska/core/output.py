@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 
 # 1.1.0: added FileEntry.triage and ParseResult.deferred_files (additive).
 # 1.2.0: added ParseResult.extraction_type (additive).
-SCHEMA_VERSION = "1.2.0"
+# 1.3.0: new FileEntry.triage formats ios_sms / ios_knowledgec / ios_addressbook (additive).
+SCHEMA_VERSION = "1.3.0"
 
 
 @dataclass
@@ -24,7 +25,7 @@ class FileEntry:
     md5: str | None
     sha256: str | None
     sqlite_schema: dict | None
-    # EVTX triage or a "deferred" container notice; None for everything else.
+    # EVTX / iOS artifact triage or a "deferred" container notice; None otherwise.
     triage: dict | None = None
 
 

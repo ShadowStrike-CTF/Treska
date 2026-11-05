@@ -1,4 +1,5 @@
-# Treska ← Poligon integration — Template F iOS FFS extractions are detected as IOS_FFS.
+# Treska ← Poligon integration — Template F iOS FFS extractions are detected as IOS_FFS
+# and (Phase 9) their sms.db / KnowledgeC.db / AddressBook.sqlitedb are triaged.
 # © 2026 ShadowStrike. All rights reserved.
 # Aut Viam Inveniam Aut Faciam
 
@@ -19,6 +20,7 @@ from poligon.core.templates import template_f  # noqa: E402
 
 from treska.core.detect import IOS_FFS  # noqa: E402
 from treska.core.pipeline import parse_zip  # noqa: E402
+from treska.parsers.ios import IOS_ARTIFACTS  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
@@ -76,6 +78,11 @@ def test_treska_detects_template_f(make_scenario, difficulty, seed):
         assert entry is not None, f"{rel} missing from inventory"
         assert "sqlite" in entry.flags
         assert entry.sqlite_schema is not None and entry.sqlite_schema["tables"]
+        # Phase 9: each Template F database gets its iOS triage, status parsed.
+        fmt = IOS_ARTIFACTS[Path(rel).name.casefold()][0]
+        assert entry.triage is not None, f"{rel} has no triage"
+        assert entry.triage["format"] == fmt
+        assert entry.triage["status"] == "parsed", entry.triage
 
     # Decoys sit alongside the markers without changing the verdict.
     for path in DECOYS:
