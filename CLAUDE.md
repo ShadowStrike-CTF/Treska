@@ -23,6 +23,7 @@ detect.py — detect_extraction_type(): IOS_FFS / ANDROID_LOGICAL / UNKNOWN by n
 evtx.py — EVTX triage via python-evtx; HIGH_VALUE_IDS, SAMPLE_CAP module constants
 sqlite_triage.py — shared read-only SQLite triage helpers + WAL staging (Phase 9/10)
 ios.py — iOS FFS artifact triage; IOS_ARTIFACTS dispatch table (Phase 9)
+android.py — Android logical artifact triage; ANDROID_ARTIFACTS dispatch table (Phase 10)
 
 ## CLI: treska/cli.py (thin wrapper over core)
 ## Web: src/treska/web/main.py (FastAPI, thin wrapper over core)
@@ -261,3 +262,73 @@ WHAT NOT TO DO (Phase 9):
 - Never remove or rename existing triage keys or EVTX formats
 - Never change `detect.py` markers or logic — only its call position moves
 - Never use ProcessPoolExecutor
+
+## Phase 10 (v1.6.0) — Android logical artifact triage
+Read-only triage of the three key Android databases, gated on extraction_type ==
+ANDROID_LOGICAL. Same slot (FileEntry.triage), same 9-key triage dict, same status rules
+as Phase 9 — CLI, web and Sarissa get it through parse_zip(); no Android logic in cli.py
+or web/main.py.
+
+New triage.format values:
+- `android_mmssms` — mmssms.db (required table: sms; pdu optional)
+  summary: total, inbox (type=1), sent (type=2), other (any other type),
+  mms_count (pdu rows; 0 when no pdu table), address_count (distinct sms.address),
+  first_message / last_message (sms.date), first_mms / last_mms (pdu.date; null when
+  no pdu table)
+  samples: ≤ SAMPLE_CAP most-recent SMS {time, direction, address, body}
+  (direction: type 1 → "received", type 2 → "sent", otherwise null)
+- `android_contacts` — contacts2.db (required table: raw_contacts)
+  summary: raw_contact_count, contact_count (contacts table), phone_count / email_count
+  (data JOIN mimetypes, mimetype vnd.android.cursor.item/phone_v2 / email_v2),
+  embedded_calls
+  samples: ≤ SAMPLE_CAP raw contacts {display_name, first_phone_or_email} (phone preferred)
+  embedded_calls (Q2 locked M/1.1.13): ALWAYS present in the summary — null when
+  contacts2.db has no calls table, else {"count": int, "types": {type_label: count}}.
+  One triage per FileEntry; never a separate triage dict for the calls table.
+  Phone numbers in full (Q3 locked M/1.1.13 — CTF data, masking hides flags).
+- `android_calllog` — calllog.db (required table: calls)
+  summary: total, by_type {type_label: count} (CALL_TYPES; unknown → "other"),
+  total_duration_seconds, first_call / last_call (calls.date)
+  samples: ≤ SAMPLE_CAP most-recent calls {time, type, number, duration_seconds}
+- CALL_TYPES: 1 incoming, 2 outgoing, 3 missed, 4 voicemail, 5 rejected, 6 blocked.
+
+Timestamp units (INV-P10-1) — fixed per column in code, NEVER guessed from the value:
+- `sms.date`, `calls.date` → Unix MILLISECONDS → unix_ms_to_iso()
+- `pdu.date` (MMS) → Unix SECONDS → unix_s_to_iso()
+- 0/None → null. Output `YYYY-MM-DDTHH:MM:SSZ` (same as Phase 9).
+
+Files:
+- src/treska/parsers/android.py — SQL and field mapping only. `ANDROID_ARTIFACTS`
+  dispatch table keyed by casefolded filename → (format, parser): mmssms.db,
+  contacts2.db, calllog.db.
+- Every connection / count / sample / truncation / result-skeleton / status-frame helper
+  lives in src/treska/parsers/sqlite_triage.py and is used by both ios.py and android.py.
+- Pipeline: triage_file() gets an ANDROID_LOGICAL branch beside the IOS_FFS branch (one
+  generic artifact-dispatch helper, SQLite-header gate, corrupt-on-exception). The two
+  branches are mutually exclusive — extraction_type has one value. detect.py unchanged.
+
+WAL handling: identical to Phase 9 Option A (Q1-A locked M/1.1.13) — `<name>-wal`
+beside the DB → copy db + -wal + -shm to temp_dir/.treska_wal/<uuid8>/, open the copy,
+`wal_present`/`wal_applied` on the triage. mmssms.db and contacts2.db commonly run in WAL.
+
+Known limitation (by design, pinned by test_android_triage_gated_on_extraction_type):
+iOS takes priority in detection. A zip with both iOS and Android markers is `IOS_FFS`,
+and its Android DBs get NO Android triage. Changing this means a multi-valued
+extraction_type — a breaking schema change, out of scope.
+
+- Schema 1.3.0 → 1.4.0 (additive: three new triage.format values and their shapes).
+  CONTRACT["1.4.0"] added to tests/test_contract.py; CONTRACT["1.2.0"] and
+  CONTRACT["1.3.0"] kept unchanged.
+- Package version 1.5.0 → 1.6.0 (new capability = MINOR)
+
+WHAT NOT TO DO (Phase 10):
+- Never copy-paste Phase 9 helpers into android.py — extend sqlite_triage.py instead
+- Never change iOS priority in detect.py or make extraction_type multi-valued
+- Never guess epoch units from the value — each column's unit is fixed in code
+- Never read parts/attachment blobs — counts and text samples only
+- Never follow paths stored inside DBs (e.g. part._data) to open other files
+- Never write to evidence or run write-side PRAGMAs
+- Never let a parser exception escape parse_zip
+- Never add third-party dependencies
+- Never remove or rename any 1.3.0 field — change must be additive only
+- Never use git add -A
