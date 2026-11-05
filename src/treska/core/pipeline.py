@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from treska.core.detect import detect_extraction_type
@@ -72,15 +73,24 @@ def triage_file(file_path: Path, path: str, extension: str, mime: str) -> dict |
     return None
 
 
-def parse_zip(zip_path: Path, keep: bool = False, no_hash: bool = False) -> ParseResult:
+def parse_zip(
+    zip_path: Path,
+    keep: bool = False,
+    no_hash: bool = False,
+    on_extract: Callable[[Path], None] | None = None,
+) -> ParseResult:
     """Extract, identify, hash and flag every file in zip_path.
 
-    The temp dir is removed before returning unless keep=True. Raises
-    ValueError for a missing or invalid zip.
+    The temp dir is removed before returning unless keep=True. on_extract, if
+    given, is called with the temp dir right after extraction (how --keep
+    learns where the files are) — the ParseResult schema stays unchanged.
+    Raises ValueError for a missing or invalid zip.
     """
     zip_path = Path(zip_path)
     temp_dir, files = extract(zip_path, keep=keep)
     try:
+        if on_extract is not None:
+            on_extract(temp_dir)
         rows = build_inventory(files, zip_path, root=temp_dir)
         sizes = [row["size_bytes"] for row in rows]
         hashes = compute_hashes(files, skip=no_hash)

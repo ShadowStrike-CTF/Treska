@@ -144,3 +144,42 @@ WHAT NOT TO DO:
 Test suite: tests/conftest.py patches TestClient's default base_url to
 "http://127.0.0.1" to match the middleware. If tests fail with 400 Invalid host
 header, check base_url first.
+
+## Phase 8 (v1.4.0) — CLI parity + Sarissa contract pinning
+New CLI flags (cli.py stays a thin wrapper — all parsing still in parse_zip()):
+- `--out FILE` (INV-03): parse FIRST, open FILE only after a successful parse — a
+  parse error (exit 2) never creates or truncates FILE. Writes `FILE.partial` in the
+  same dir, then `os.replace` onto FILE; `.partial` unlinked in a finally block.
+  With `--json` the file is byte-identical to `--json` stdout (`_render_json`).
+  Pretty mode renders through the same `_pretty_print(result, console, ...)` with
+  `Console(file=fh, force_terminal=False, color_system=None, width=OUT_WIDTH,
+  highlight=False)`; `OUT_WIDTH = 120` module constant. Stdout is exactly
+  `Written to: <absolute path>` (plain print). Exit 3 when FILE can't be written:
+  stderr `treska: cannot write output: <path>: <reason>`.
+- `--no-hash` (INV-05): pass-through to `compute_hashes(skip=True)`; md5/sha256 keys
+  always present — null in JSON, — in pretty. Mismatch flags unchanged (INV-04).
+- `--keep` (INV-07 opt-out of temp-dir cleanup): `parse_zip(keep=True)`; CLI prints
+  `Kept: <path>` to STDERR (diagnostic channel — stdout / --out untouched). CLI only.
+- Exit codes: 1 input not found/unreadable · 2 parse error · 3 --out unwritable.
+
+on_extract callback: `parse_zip(..., on_extract: Callable[[Path], None] | None = None)`
+is called with temp_dir right after extraction (inside the try, so cleanup still
+runs). It's how the caller learns the temp path — no ParseResult schema change.
+
+Contract test (tests/test_contract.py): stdlib-only `CONTRACT[schema_version]` maps
+result / file_entry / deferred keys → types (nullable = `T | None`). Exact key-set and
+exact type equality via CLI subprocess and web TestClient `/api/parse` (sample.zip +
+an in-test EVF zip so deferred_files is exercised). `test_contract_version_registered`
+fails if SCHEMA_VERSION is bumped without a CONTRACT entry. Purpose: Sarissa reads this
+JSON — any field drift fails loudly here before it ships.
+
+- Schema: unchanged, stays 1.2.0. Package version 1.3.1 → 1.4.0 (new capability = MINOR)
+- Tests: 68 → 83 (15 new: 12 in tests/test_cli.py, 3 in tests/test_contract.py)
+
+WHAT NOT TO DO (Phase 8):
+- Never add fields to ParseResult or FileEntry in Phase 8
+- Never print to stdout except `Written to:` when `--out` is set
+- Never let `--no-hash` drop or blank the hash fields (must be null/—)
+- Never write `--out` directly to the final path (use .partial + os.replace)
+- Never expose `--keep` in the web UI
+- Never add jsonschema or any test/runtime dependency for the contract test
