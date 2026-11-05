@@ -16,11 +16,13 @@ heuristics.py — 8 interesting-file flags
 hashing.py — MD5/SHA-256 per file (ThreadPoolExecutor > 100 files; --no-hash → None)
 sqlite_probe.py — SQLite schema extraction (magic bytes, not extension)
 output.py — ParseResult dataclass consumed by both CLI and web
-pipeline.py — parse_zip() entry point; triage_file() magic-byte dispatch (EVTX / deferred)
+pipeline.py — parse_zip() entry point; triage_file() magic-byte dispatch (EVTX / deferred / iOS artifacts)
 detect.py — detect_extraction_type(): IOS_FFS / ANDROID_LOGICAL / UNKNOWN by name only
 
 ## Parsers (src/treska/parsers/)
 evtx.py — EVTX triage via python-evtx; HIGH_VALUE_IDS, SAMPLE_CAP module constants
+sqlite_triage.py — shared read-only SQLite triage helpers + WAL staging (Phase 9/10)
+ios.py — iOS FFS artifact triage; IOS_ARTIFACTS dispatch table (Phase 9)
 
 ## CLI: treska/cli.py (thin wrapper over core)
 ## Web: src/treska/web/main.py (FastAPI, thin wrapper over core)
@@ -40,7 +42,7 @@ ProcessPoolExecutor, fork-bombs on Windows under PyInstaller), stdlib only elsew
 - --no-hash: hash columns always present, render as — (console/file) or null (JSON)
 - ThreadPoolExecutor only — NEVER ProcessPoolExecutor
 - Temp dir: ALWAYS cleaned on exit, even on error (try/finally)
-- JSON schema: stable at v1.2.0, schema_version field in every output
+- JSON schema: stable at v1.3.0, schema_version field in every output
 
 ## WHAT NOT TO DO
 - Never duplicate parsing logic between cli.py and web/main.py
@@ -239,8 +241,14 @@ WAL handling (Option A — locked M/1.1.13):
   CONTRACT["1.3.0"] added to tests/test_contract.py; CONTRACT["1.2.0"] kept unchanged.
 - Package version 1.4.0 → 1.5.0 (new capability = MINOR)
 - Tests: baseline 82 collected (81 passed + Poligon integration module skipped —
-  the Phase 8 line above says 83; that count is drift) → +15 (tests/test_phase9_ios.py
-  synthetic DBs in tmp_path with real iOS table/column names; test_contract_1_3_0)
+  the Phase 8 line above says 83; that count is drift) → 98 collected (97 passed +
+  Poligon module skipped). 16 new: 15 in tests/test_phase9_ios.py (synthetic DBs in
+  tmp_path with real iOS table/column names), 1 in tests/test_contract.py
+  (test_contract_1_3_0). tests/integration/test_poligon_template_f.py also asserts
+  ios_* triage status "parsed" for every Template F seed/difficulty.
+- Fixture: tests/fixtures/ios_sample.zip (regenerate with
+  python tests/fixtures/make_ios_fixture.py) — sms.db ships an uncheckpointed -wal/-shm
+  so the WAL path runs end to end; used by the contract test and the G.0 smoke gate.
 
 WHAT NOT TO DO (Phase 9):
 - Never open evidence read-write

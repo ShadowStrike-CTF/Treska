@@ -7,15 +7,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from treska.core.detect import detect_extraction_type
+from treska.core.detect import IOS_FFS, UNKNOWN, detect_extraction_type
 from treska.core.hashing import compute_hashes
 from treska.core.heuristics import flag_file
 from treska.core.ingestion import cleanup, extract
 from treska.core.inventory import build_inventory
 from treska.core.magic_check import check_magic
 from treska.core.output import FileEntry, ParseResult, build_parse_result
-from treska.core.sqlite_probe import probe_sqlite
+from treska.core.sqlite_probe import is_sqlite, probe_sqlite
 from treska.parsers.evtx import EVTX_MAGIC, parse_evtx
+from treska.parsers.ios import IOS_ARTIFACTS
+from treska.parsers.sqlite_triage import result_skeleton
 
 _EXTRACT = " to extract before submitting to Treska."
 
@@ -49,12 +51,41 @@ def _deferred(path: str, fmt: str, message: str) -> dict:
     }
 
 
-def triage_file(file_path: Path, path: str, extension: str, mime: str) -> dict | None:
+def _ios_triage(file_path: Path, path: str, work_dir: Path | None) -> dict | None:
+    """iOS artifact triage by casefolded filename, gated on the SQLite header.
+
+    A known name without the header is reported corrupt, never skipped; a parser
+    exception becomes status "corrupt" so nothing escapes parse_zip.
+    """
+    known = IOS_ARTIFACTS.get(Path(path).name.casefold())
+    if known is None:
+        return None
+    fmt, parser = known
+    if not is_sqlite(file_path):
+        return {**result_skeleton(path, fmt), "status": "corrupt",
+                "error": "not a SQLite database"}
+    try:
+        return parser(file_path, path, work_dir=work_dir)
+    except Exception as exc:  # noqa: BLE001 — parsers already catch; belt and braces
+        return {**result_skeleton(path, fmt), "status": "corrupt",
+                "error": f"{type(exc).__name__}: {exc}"}
+
+
+def triage_file(
+    file_path: Path,
+    path: str,
+    extension: str,
+    mime: str,
+    extraction_type: str = UNKNOWN,
+    work_dir: Path | None = None,
+) -> dict | None:
     """Format-specific triage, dispatched on magic bytes first, extension second.
 
-    EVTX -> parse_evtx dict; forensic container -> status "deferred"; else None.
-    A ".evtx" without the ElfFile header still goes to parse_evtx so it is
-    reported as corrupt rather than silently skipped.
+    EVTX -> parse_evtx dict; forensic container -> status "deferred"; in an
+    IOS_FFS tree, sms.db / KnowledgeC.db / AddressBook.sqlitedb -> iOS triage
+    dict; else None. A ".evtx" without the ElfFile header still goes to
+    parse_evtx so it is reported as corrupt rather than silently skipped.
+    work_dir is where WAL copies are staged (the parse temp dir).
     """
     try:
         with open(file_path, "rb") as fh:
@@ -70,6 +101,8 @@ def triage_file(file_path: Path, path: str, extension: str, mime: str) -> dict |
         return parse_evtx(head, filename=path)
     if extension in DEFERRED_EXTENSIONS and mime == _UNIDENTIFIED_MIME:
         return _deferred(path, extension, DEFERRED_EXTENSIONS[extension])
+    if extraction_type == IOS_FFS:
+        return _ios_triage(file_path, path, work_dir)
     return None
 
 
@@ -81,6 +114,9 @@ def parse_zip(
 ) -> ParseResult:
     """Extract, identify, hash and flag every file in zip_path.
 
+    Hashes are computed on the extracted originals before triage, so a WAL
+    copy staged under temp_dir/.treska_wal never precedes hashing.
+
     The temp dir is removed before returning unless keep=True. on_extract, if
     given, is called with the temp dir right after extraction (how --keep
     learns where the files are) — the ParseResult schema stays unchanged.
@@ -91,6 +127,9 @@ def parse_zip(
     try:
         if on_extract is not None:
             on_extract(temp_dir)
+        # Detect first: per-file triage (iOS artifacts) depends on it. Runs
+        # before any WAL copy is staged under temp_dir, so it sees evidence only.
+        extraction_type = detect_extraction_type(temp_dir)
         rows = build_inventory(files, zip_path, root=temp_dir)
         sizes = [row["size_bytes"] for row in rows]
         hashes = compute_hashes(files, skip=no_hash)
@@ -111,9 +150,12 @@ def parse_zip(
                 md5=md5,
                 sha256=sha256,
                 sqlite_schema=probe_sqlite(file_path) if "sqlite" in flags else None,
-                triage=triage_file(file_path, row["path"], row["extension"], magic_result["mime"]),
+                triage=triage_file(
+                    file_path, row["path"], row["extension"], magic_result["mime"],
+                    extraction_type, work_dir=temp_dir,
+                ),
             ))
-        return build_parse_result(str(zip_path), entries, detect_extraction_type(temp_dir))
+        return build_parse_result(str(zip_path), entries, extraction_type)
     finally:
         if not keep:
             cleanup(temp_dir)

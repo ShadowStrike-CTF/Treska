@@ -143,6 +143,7 @@
       <span class="stat" id="r-flagged-wrap"><b id="r-flagged"></b> flagged</span>
       <span class="stat"><b id="r-sqlite"></b> SQLite</span>
       <span class="stat"><b id="r-evtx"></b> EVTX</span>
+      <span class="stat"><b id="r-ios"></b> iOS</span>
       <span class="stat" id="r-deferred-wrap"><b id="r-deferred"></b> deferred</span>
       <span class="stat" id="r-mismatch-wrap"><b id="r-mismatch"></b> magic mismatch</span>
       <span class="schema" id="r-schema"></span>
@@ -157,6 +158,9 @@
 
     <h2>Event logs <span class="count" id="evtx-count"></span></h2>
     <div id="evtx"></div>
+
+    <h2>iOS artifacts <span class="count" id="ios-count"></span></h2>
+    <div id="ios"></div>
 
     <h2>Deferred containers <span class="count" id="deferred-count"></span></h2>
     <div id="deferred"></div>
@@ -227,6 +231,7 @@
   function render(r) {
     const sqlite = r.inventory.filter((e) => e.sqlite_schema !== null);
     const evtx = r.inventory.filter((e) => e.triage && e.triage.format === "evtx");
+    const ios = r.inventory.filter((e) => e.triage && String(e.triage.format || "").startsWith("ios_"));
     const deferred = r.deferred_files || [];
     const mismatches = r.inventory.filter((e) => e.mismatch).length;
 
@@ -236,6 +241,7 @@
     $("r-flagged").textContent = r.flagged.length;
     $("r-sqlite").textContent = sqlite.length;
     $("r-evtx").textContent = evtx.length;
+    $("r-ios").textContent = ios.length;
     $("r-deferred").textContent = deferred.length;
     $("r-mismatch").textContent = mismatches;
     $("r-schema").textContent = "schema " + r.schema_version;
@@ -246,6 +252,7 @@
     renderFlagged(r.flagged);
     renderSqlite(sqlite);
     renderEvtx(evtx.map((e) => e.triage));
+    renderIos(ios.map((e) => e.triage));
     renderDeferred(deferred);
     renderInventory(r.inventory);
     results.classList.add("show");
@@ -309,6 +316,43 @@
         el("div", { class: "muted", text: summary }),
         top ? el("div", { class: "cols", text: "top IDs: " + top }) : null,
         items.length ? el("ul", null, items) : null,
+      ]);
+    }));
+  }
+
+  // Ranked lists ([{stream|bundle_id, count}]) -> "label×count, ..."; null -> —.
+  function iosValue(v) {
+    if (Array.isArray(v)) {
+      if (!v.length) return "(none)";
+      return v.map((item) => {
+        const label = Object.entries(item).find(([k]) => k !== "count");
+        return orDash(label ? label[1] : null) + "×" + item.count;
+      }).join(", ");
+    }
+    return orDash(v);
+  }
+
+  // Message bodies, handles and bundle IDs are attacker-controlled CTF content:
+  // el()/textContent only, never parsed as HTML.
+  function renderIos(items) {
+    $("ios-count").textContent = "(" + items.length + ")";
+    const box = $("ios");
+    if (!items.length) { box.replaceChildren(el("p", { class: "muted", text: "No iOS artifacts." })); return; }
+    box.replaceChildren(...items.map((t) => {
+      let status = t.format + " · " + t.status;
+      if (t.wal_present) status += t.wal_applied ? " · WAL applied" : " · WAL present, not applied";
+      if (t.error) status += " · " + t.error;
+      const summary = Object.entries(t.summary || {}).map(([k, v]) =>
+        el("div", { class: "cols", text: k + ": " + iosValue(v) }));
+      const warnings = (t.warnings || []).map((w) => el("div", { class: "muted", text: "warning: " + w }));
+      const samples = (t.samples || []).map((s) => el("li", { text:
+        Object.entries(s).map(([k, v]) => k + "=" + orDash(v)).join(" · ") }));
+      return el("div", { class: "sqlite" }, [
+        el("div", { class: "file", text: t.filename }),
+        el("div", { class: "muted", text: status }),
+        ...warnings,
+        ...summary,
+        samples.length ? el("ul", null, samples) : null,
       ]);
     }));
   }

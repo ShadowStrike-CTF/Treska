@@ -47,7 +47,7 @@ def test_parse_result_structure():
         "schema_version", "zip_path", "file_count", "flagged", "inventory", "deferred_files",
         "extraction_type",
     }
-    assert data["schema_version"] == "1.2.0"
+    assert data["schema_version"] == "1.3.0"
     assert data["file_count"] == len(data["inventory"])
 
 
