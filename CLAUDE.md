@@ -119,10 +119,15 @@ python-magic: hook-magic.py from pyinstaller-hooks-contrib handles it automatica
 - LICENSE: all rights reserved, no reproduction/distribution without ShadowStrike's written permission
 - pyproject: `license = {text = "Proprietary"}`, classifier `License :: Other/Proprietary License`
 - Every package .py carries `# © 2026 ShadowStrike. All rights reserved.` in its header
-  (vendored `_vendor/megdan_schema/` excluded — hash-pinned, never edited)
 - README footer: `© 2026 ShadowStrike. All rights reserved. Aut Viam Inveniam Aut Faciam`
 - MIT releases already on PyPI stay MIT; the proprietary licence applies from this version on
 - Version 1.2.1 → 1.3.0. No tag pushed
+
+## v1.3.1 — F02 TrustedHostMiddleware (patch)
+v1.3.1 (F02 — M/1.1.12): TrustedHostMiddleware added. Restricts accepted Host
+headers to 127.0.0.1 and localhost only. tests/conftest.py base_url patched to
+http://127.0.0.1 — do not revert.
+- Tests: 65 → 68 (confirmed at M/1.1.13 recon)
 
 ## Security Middleware — TrustedHostMiddleware (F02 — M/1.1.12)
 
