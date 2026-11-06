@@ -4,7 +4,8 @@
 #
 # Synthetic iOS FFS tree (no real case data): sms.db (with an uncheckpointed
 # -wal/-shm sidecar), knowledgeC.db and AddressBook.sqlitedb, using the real iOS
-# table and column names. Also imported by tests/test_phase9_ios.py for its DDL
+# table and column names. Phase 11 adds CallHistory.storedata (uncheckpointed
+# -wal/-shm, one ZADDRESS stored as a BLOB) and Safari History.db. Also imported by tests/test_phase9_ios.py for its DDL
 # and builders, so there is one source of the synthetic schemas.
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ COCOA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 SMS_PATH = "HomeDomain/Library/SMS/sms.db"
 KNOWLEDGEC_PATH = "private/var/mobile/Library/CoreDuet/Knowledge/knowledgeC.db"
 ADDRESSBOOK_PATH = "HomeDomain/Library/AddressBook/AddressBook.sqlitedb"
+CALLHISTORY_PATH = "private/var/mobile/Library/CallHistoryDB/CallHistory.storedata"
+SAFARI_PATH = "private/var/mobile/Library/Safari/History.db"
 
 SMS_DDL = """
 CREATE TABLE handle (ROWID INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, id TEXT NOT NULL,
@@ -55,8 +58,36 @@ CREATE TABLE ABMultiValue (UID INTEGER PRIMARY KEY, record_id INTEGER, property 
     identifier INTEGER, label INTEGER, value TEXT, guid TEXT);
 """
 
+# Subset of the CoreData CallHistory model (ZCALLRECORD).
+CALLHISTORY_DDL = """
+CREATE TABLE ZCALLRECORD (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER,
+    ZANSWERED INTEGER, ZCALLTYPE INTEGER, ZDISCONNECTED_CAUSE INTEGER, ZFACE_TIME_DATA BLOB,
+    ZNUMBER_AVAILABILITY INTEGER, ZORIGINATED INTEGER, ZREAD INTEGER, ZDATE TIMESTAMP,
+    ZDURATION FLOAT, ZADDRESS VARCHAR, ZDEVICE_ID VARCHAR, ZISO_COUNTRY_CODE VARCHAR,
+    ZLOCATION VARCHAR, ZNAME VARCHAR, ZSERVICE_PROVIDER VARCHAR, ZUNIQUE_ID VARCHAR);
+"""
+
+# Subset of the Safari History.db schema.
+SAFARI_DDL = """
+CREATE TABLE history_items (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL UNIQUE,
+    domain_expansion TEXT NULL, visit_count INTEGER NOT NULL DEFAULT 0,
+    daily_visit_counts BLOB NOT NULL DEFAULT x'', weekly_visit_counts BLOB NULL,
+    autocomplete_triggers BLOB NULL,
+    should_recompute_derived_visit_counts INTEGER NOT NULL DEFAULT 0,
+    visit_count_score INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE history_visits (id INTEGER PRIMARY KEY AUTOINCREMENT,
+    history_item INTEGER NOT NULL REFERENCES history_items(id) ON DELETE CASCADE,
+    visit_time REAL NOT NULL, title TEXT NULL, load_successful BOOLEAN NOT NULL DEFAULT 1,
+    http_non_get BOOLEAN NOT NULL DEFAULT 0, synthesized BOOLEAN NOT NULL DEFAULT 0,
+    redirect_source INTEGER NULL UNIQUE, redirect_destination INTEGER NULL UNIQUE,
+    origin INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0,
+    attributes INTEGER NOT NULL DEFAULT 0, score INTEGER NOT NULL DEFAULT 0);
+"""
+
 AB_PHONE = 3
 AB_EMAIL = 4
+SERVICE_TELEPHONY = "com.apple.Telephony"
+SERVICE_FACETIME = "com.apple.FaceTime"
 
 
 def cocoa_seconds(dt: datetime) -> int:
@@ -145,6 +176,26 @@ def ab_value(uid: int, record_id: int, prop: int, value: str):
             (uid, record_id, prop, value))
 
 
+def call_record(pk: int, address, date: float, duration: float, originated: int,
+                answered: int, service: str | None = SERVICE_TELEPHONY):
+    """address may be str or bytes — bytes is stored as a BLOB (some iOS versions)."""
+    return (
+        "INSERT INTO ZCALLRECORD (Z_PK, ZADDRESS, ZDATE, ZDURATION, ZORIGINATED, ZANSWERED, "
+        "ZSERVICE_PROVIDER) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (pk, address, date, duration, originated, answered, service),
+    )
+
+
+def safari_item(item_id: int, url: str, domain: str | None, visits: int = 1):
+    return ("INSERT INTO history_items (id, url, domain_expansion, visit_count) VALUES (?, ?, ?, ?)",
+            (item_id, url, domain, visits))
+
+
+def safari_visit(visit_id: int, item_id: int, visit_time: float, title: str | None):
+    return ("INSERT INTO history_visits (id, history_item, visit_time, title) VALUES (?, ?, ?, ?)",
+            (visit_id, item_id, visit_time, title))
+
+
 def build_ios_tree(root: Path) -> list[Path]:
     """Write the sample iOS FFS tree under root; return every file written."""
     root = Path(root)
@@ -191,10 +242,34 @@ def build_ios_tree(root: Path) -> list[Path]:
         ],
     )
 
+    # ZDATE / visit_time: Cocoa SECONDS (REAL), not nanoseconds.
+    callhistory = make_db(
+        root / CALLHISTORY_PATH, CALLHISTORY_DDL,
+        rows=[
+            call_record(1, "+15550100", day + 60, 42.4, 0, 1),
+            call_record(2, b"+15550111", day + 120, 0.0, 0, 0),  # ZADDRESS as BLOB
+            call_record(3, "analyst@example.org", day + 180, 125.6, 1, 1, SERVICE_FACETIME),
+        ],
+        # Only visible once the WAL is replayed.
+        wal_rows=[call_record(4, "+15550112", day + 240, 12.0, 1, 1)],
+    )
+
+    safari = make_db(
+        root / SAFARI_PATH, SAFARI_DDL,
+        rows=[
+            safari_item(1, "https://maps.example.com/locker", "maps.example.com", 2),
+            safari_item(2, "https://news.example.org/", "news.example.org", 1),
+            safari_visit(1, 1, day + 30, "Locker map"),
+            safari_visit(2, 2, day + 90, "Morning news"),
+            safari_visit(3, 1, day + 150, "Locker map"),
+        ],
+    )
+
     readme = root / "readme.txt"
     readme.write_bytes(b"Treska synthetic iOS FFS fixture.\n")
-    written = [sms, knowledgec, addressbook, readme]
-    written += [Path(str(sms) + s) for s in ("-wal", "-shm") if Path(str(sms) + s).is_file()]
+    written = [sms, knowledgec, addressbook, callhistory, safari, readme]
+    for db in (sms, callhistory):
+        written += [Path(str(db) + s) for s in ("-wal", "-shm") if Path(str(db) + s).is_file()]
     return sorted(written)
 
 

@@ -147,9 +147,13 @@
       <span class="stat"><b id="r-android"></b> Android</span>
       <span class="stat" id="r-deferred-wrap"><b id="r-deferred"></b> deferred</span>
       <span class="stat" id="r-mismatch-wrap"><b id="r-mismatch"></b> magic mismatch</span>
+      <span class="stat" id="r-flaghits-wrap"><b id="r-flaghits"></b></span>
       <span class="schema" id="r-schema"></span>
       <button type="button" id="export">Export JSON</button>
     </div>
+
+    <h2>Flag candidates <span class="count" id="flaghits-count"></span></h2>
+    <div id="flaghits"></div>
 
     <h2>Flagged files <span class="count" id="flagged-count"></span></h2>
     <div id="flagged"></div>
@@ -255,7 +259,12 @@
     $("r-flagged-wrap").classList.toggle("alert", r.flagged.length > 0);
     $("r-mismatch-wrap").classList.toggle("alert", mismatches > 0);
     $("r-deferred-wrap").classList.toggle("alert", deferred.length > 0);
+    const flagHits = r.flag_hits;  // null when the scan was skipped (CLI only)
+    $("r-flaghits").textContent = flagHits === null || flagHits === undefined
+      ? "flag scan skipped" : flagHits.length + " flag hits";
+    $("r-flaghits-wrap").classList.toggle("alert", !!(flagHits && flagHits.length));
 
+    renderFlagHits(flagHits);
     renderFlagged(r.flagged);
     renderSqlite(sqlite);
     renderEvtx(evtx.map((e) => e.triage));
@@ -271,6 +280,28 @@
     if (entry.mismatch) cell.appendChild(el("span", { class: "mismatch", text: "MISMATCH" }));
     for (const f of entry.flags) cell.appendChild(el("span", { class: "flag", text: f }));
     return cell;
+  }
+
+  // Flag matches are attacker-controlled CTF bytes: el()/textContent only, never innerHTML.
+  function renderFlagHits(hits) {
+    const box = $("flaghits");
+    if (hits === null || hits === undefined) {
+      $("flaghits-count").textContent = "";
+      box.replaceChildren(el("p", { class: "muted", text: "Flag scan skipped." }));
+      return;
+    }
+    $("flaghits-count").textContent = "(" + hits.length + ")";
+    if (!hits.length) { box.replaceChildren(el("p", { class: "muted", text: "No flag candidates." })); return; }
+    const head = el("tr", null, ["Match", "Path", "Offset", "Encoding"].map((h) => el("th", { text: h })));
+    const rows = hits.map((h) => el("tr", null, [
+      el("td", { class: "path", text: h.match }),
+      el("td", { class: "path", text: h.path }),
+      el("td", { class: "num", text: String(h.offset) }),
+      el("td", { text: h.encoding }),
+    ]));
+    box.replaceChildren(el("div", { class: "scroll" }, [
+      el("table", null, [el("thead", null, [head]), el("tbody", null, rows)]),
+    ]));
   }
 
   function renderFlagged(flagged) {

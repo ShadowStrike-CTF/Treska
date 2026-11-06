@@ -28,6 +28,7 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 SAMPLE_ZIP = FIXTURES / "sample.zip"
 IOS_ZIP = FIXTURES / "ios_sample.zip"
 ANDROID_ZIP = FIXTURES / "android_sample.zip"
+FLAG_ZIP = FIXTURES / "flag_scan_sample.zip"
 
 CONTRACT: dict[str, dict[str, dict[str, object]]] = {
     "1.2.0": {
@@ -207,6 +208,77 @@ CONTRACT["1.4.0"] = {
     },
 }
 
+# 1.5.0 (Phase 11): additive — everything in 1.4.0 unchanged, plus ParseResult.flag_hits
+# (list, or null when --no-flag-scan) with one pinned item shape, and three formats.
+CONTRACT["1.5.0"] = {
+    **{key: dict(shape) for key, shape in CONTRACT["1.4.0"].items()},
+    "result": {**CONTRACT["1.4.0"]["result"], "flag_hits": list | None},
+    "flag_hit": {"path": str, "offset": int, "encoding": str, "match": str},
+    "triage": {
+        **CONTRACT["1.4.0"]["triage"],
+        "ios_callhistory": {
+            "triage": _SQLITE_TRIAGE,
+            "summary": {
+                "total": int | None,
+                "incoming": int | None,
+                "outgoing": int | None,
+                "answered": int | None,
+                "missed": int | None,
+                "by_service": dict | None,
+                "total_duration_seconds": int | None,
+                "first_call": str | None,
+                "last_call": str | None,
+            },
+            "sample": {
+                "time": str | None,
+                "direction": str | None,
+                "address": str | None,
+                "duration_seconds": int | None,
+                "service": str | None,
+            },
+            "items": {},
+            "count_maps": ("by_service",),
+        },
+        "ios_safari": {
+            "triage": _SQLITE_TRIAGE,
+            "summary": {
+                "url_count": int | None,
+                "visit_count": int | None,
+                "domain_count": int | None,
+                "top_domains": list | None,
+                "first_visit": str | None,
+                "last_visit": str | None,
+            },
+            "sample": {
+                "time": str | None,
+                "title": str | None,
+                "url": str | None,
+            },
+            "items": {"top_domains": {"domain": str, "count": int}},
+        },
+        "android_chrome": {
+            "triage": _SQLITE_TRIAGE,
+            "summary": {
+                "url_count": int | None,
+                "visit_count": int | None,
+                "typed_count": int | None,
+                "search_term_count": int | None,
+                "top_domains": list | None,
+                "first_visit": str | None,
+                "last_visit": str | None,
+            },
+            "sample": {
+                "kind": str,
+                "time": str | None,
+                "title": str | None,
+                "url": str | None,
+                "term": str | None,
+            },
+            "items": {"top_domains": {"domain": str, "count": int}},
+        },
+    },
+}
+
 
 def _allowed(spec: object) -> tuple[type, ...]:
     # `T | None` -> (T, NoneType); a bare type -> (T,).
@@ -215,11 +287,14 @@ def _allowed(spec: object) -> tuple[type, ...]:
     return (spec,)
 
 
-def _check(obj: dict, shape: dict[str, object], where: str) -> None:
+def _check(obj: dict, shape: dict[str, object], where: str, *, additive: bool = False) -> None:
+    # additive: obj may carry keys added by a later schema (a pinned older contract
+    # checked against current output); every pinned key must still match exactly.
     assert isinstance(obj, dict), f"{where}: not an object"
-    assert set(obj) == set(shape), (
-        f"{where}: keys differ — extra {sorted(set(obj) - set(shape))}, "
-        f"missing {sorted(set(shape) - set(obj))}"
+    missing = set(shape) - set(obj)
+    extra = set(obj) - set(shape)
+    assert not missing and (additive or not extra), (
+        f"{where}: keys differ — extra {sorted(extra)}, missing {sorted(missing)}"
     )
     for key, spec in shape.items():
         # Exact type match: bool must not pass as int, nor int as bool.
@@ -258,9 +333,14 @@ def _check_contract(
     expect_deferred: bool = False,
     expect_formats: frozenset[str] = frozenset(),
 ) -> None:
-    # version pins an older CONTRACT entry: additive bumps keep older shapes valid.
+    # version pins an older CONTRACT entry: additive bumps keep older shapes valid,
+    # so the top level may carry later keys (e.g. 1.5.0 flag_hits); all else is exact.
     contract = CONTRACT[version or data["schema_version"]]
-    _check(data, contract["result"], "result")
+    pinned_older = version is not None and version != data["schema_version"]
+    _check(data, contract["result"], "result", additive=pinned_older)
+    if "flag_hit" in contract:
+        for i, hit in enumerate(data["flag_hits"] or []):
+            _check(hit, contract["flag_hit"], f"flag_hits[{i}]")
     triage_shapes = contract.get("triage", {})
     seen: set[str] = set()
     for i, entry in enumerate(data["inventory"]):
@@ -289,10 +369,10 @@ def deferred_zip(tmp_path: Path) -> Path:
     return path
 
 
-def _cli_json(zip_path: Path) -> dict:
+def _cli_json(zip_path: Path, *extra: str) -> dict:
     env = {**os.environ, "PYTHONPATH": str(SRC)}
     proc = subprocess.run(
-        [sys.executable, "-m", "treska.cli", "--json", str(zip_path)],
+        [sys.executable, "-m", "treska.cli", "--json", *extra, str(zip_path)],
         capture_output=True, text=True, env=env,
     )
     assert proc.returncode == 0, proc.stderr
@@ -344,8 +424,10 @@ def test_contract_1_3_0():
         _check_contract(data, expect_formats=IOS_FORMATS)
         statuses = {
             e["triage"]["format"]: e["triage"]["status"]
-            for e in data["inventory"] if e["triage"] is not None
+            for e in data["inventory"]
+            if e["triage"] is not None and e["triage"]["format"] in IOS_FORMATS
         }
+        # Only the 1.3.0 formats: the fixture gained Phase 11 artifacts since.
         assert statuses == dict.fromkeys(IOS_FORMATS, "parsed")
 
 
@@ -363,12 +445,55 @@ def test_contract_1_4_0():
     for fmt, shape in CONTRACT["1.3.0"]["triage"].items():
         assert CONTRACT["1.4.0"]["triage"][fmt] is shape
     for data in (_cli_json(ANDROID_ZIP), _web_json(ANDROID_ZIP)):
-        assert data["schema_version"] == "1.4.0"
+        assert data["schema_version"] == SCHEMA_VERSION
         assert data["extraction_type"] == "ANDROID_LOGICAL"
+        # 1.5.0 is additive: Android output still matches the unchanged 1.4.0 shapes.
+        _check_contract(data, version="1.4.0", expect_formats=ANDROID_FORMATS)
         _check_contract(data, expect_formats=ANDROID_FORMATS)
         triages = {e["triage"]["format"]: e["triage"]
-                   for e in data["inventory"] if e["triage"] is not None}
+                   for e in data["inventory"]
+                   if e["triage"] is not None and e["triage"]["format"] in ANDROID_FORMATS}
         assert {f: t["status"] for f, t in triages.items()} == dict.fromkeys(ANDROID_FORMATS, "parsed")
         # The fixture's contacts2.db carries the embedded calls table: the nested
         # object and its count map are exercised, not just allowed to be null.
         assert triages["android_contacts"]["summary"]["embedded_calls"] is not None
+
+
+PHASE11_IOS = frozenset({"ios_callhistory", "ios_safari"})
+PHASE11_ANDROID = frozenset({"android_chrome"})
+
+
+def test_contract_1_5_0():
+    """Phase 11: CLI and web output match CONTRACT["1.5.0"] — the three new formats
+    (every triage, summary, sample, ranked list and count map), flag_hits items, and
+    flag_hits null under --no-flag-scan. Every 1.4.0 shape is carried over unchanged."""
+    assert {"1.2.0", "1.3.0", "1.4.0", "1.5.0"} <= set(CONTRACT)
+    for key, shape in CONTRACT["1.4.0"].items():
+        if key not in ("triage", "result"):
+            assert CONTRACT["1.5.0"][key] == shape
+    assert CONTRACT["1.5.0"]["result"] == {**CONTRACT["1.4.0"]["result"], "flag_hits": list | None}
+    for fmt, shape in CONTRACT["1.4.0"]["triage"].items():
+        assert CONTRACT["1.5.0"]["triage"][fmt] is shape
+
+    cases = ((IOS_ZIP, "IOS_FFS", IOS_FORMATS | PHASE11_IOS),
+             (ANDROID_ZIP, "ANDROID_LOGICAL", ANDROID_FORMATS | PHASE11_ANDROID))
+    for zip_path, extraction, formats in cases:
+        for data in (_cli_json(zip_path), _web_json(zip_path)):
+            assert data["schema_version"] == "1.5.0"
+            assert data["extraction_type"] == extraction
+            _check_contract(data, expect_formats=formats)
+            statuses = {e["triage"]["format"]: e["triage"]["status"]
+                        for e in data["inventory"] if e["triage"] is not None}
+            assert statuses == dict.fromkeys(formats, "parsed")
+            assert isinstance(data["flag_hits"], list)
+
+    android = _web_json(ANDROID_ZIP)
+    assert [h["match"] for h in android["flag_hits"]] == ["flag{ph11}"]
+    flags = _cli_json(FLAG_ZIP)
+    _check_contract(flags)
+    assert [(h["encoding"], h["match"]) for h in flags["flag_hits"]] == [
+        ("base64", "flag{b64_wrapped_ph11}")]
+
+    skipped = _cli_json(ANDROID_ZIP, "--no-flag-scan")
+    assert "flag_hits" in skipped and skipped["flag_hits"] is None
+    _check_contract(skipped, expect_formats=ANDROID_FORMATS | PHASE11_ANDROID)

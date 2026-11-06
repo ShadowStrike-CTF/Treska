@@ -247,6 +247,63 @@ def fetch_rows(conn: sqlite3.Connection, triage: dict[str, Any], sql: str,
         return []
 
 
+UNKNOWN_LABEL = "unknown"  # count_map label for NULL / blob group keys
+
+
+def count_map(
+    conn: sqlite3.Connection,
+    triage: dict[str, Any],
+    sql: str,
+    params: tuple = (),
+    key: Callable[[str], str | None] | None = None,
+) -> dict[str, int] | None:
+    """Run a `label, count` GROUP BY query -> {label: count}.
+
+    NULL / blob labels become "unknown"; labels are TEXT_CAP-truncated. key, if
+    given, re-buckets each label in Python (e.g. URL -> host) and counts merge;
+    a key returning None/"" also lands in "unknown". On sqlite3.Error: warning + None.
+    """
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.Error as exc:
+        warn(triage, f"query failed ({type(exc).__name__}: {exc})")
+        return None
+    counts: dict[str, int] = {}
+    for label, n in rows:
+        text = truncate(label)
+        if text is not None and key is not None:
+            text = truncate(key(text))
+        if not text:
+            text = UNKNOWN_LABEL
+        counts[text] = counts.get(text, 0) + int(n or 0)
+    return counts
+
+
+def ranked(counts: dict[str, int] | None, label_key: str, n: int = TOP_N) -> list[dict] | None:
+    """{label: count} -> [{label_key: label, "count": count}], count DESC then
+    label ASC, at most n entries. None stays None."""
+    if counts is None:
+        return None
+    order = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [{label_key: label, "count": count} for label, count in order[:n]]
+
+
+def has_all_tables(path: Path, required: tuple[str, ...]) -> bool:
+    """True when the ORIGINAL db (immutable read-only, no WAL replay) has every
+    required table. The generic-name pre-check (History / History.db). Never raises."""
+    try:
+        conn = open_readonly(Path(path))
+    except (sqlite3.Error, OSError):
+        return False
+    try:
+        schema = folded_schema(conn)
+        return all(has(schema, table) for table in required)
+    except (sqlite3.Error, OSError):
+        return False
+    finally:
+        conn.close()
+
+
 def triage_sqlite(
     path: Path,
     filename: str,
@@ -254,12 +311,14 @@ def triage_sqlite(
     required: tuple[str, ...],
     body: Body,
     work_dir: Path | None,
+    sample_cap: int = SAMPLE_CAP,
 ) -> dict[str, Any]:
     """Shared frame for every SQLite artifact (iOS and Android): open (WAL-aware,
     read-only), check required tables, run body.
 
     status: corrupt = can't open / none of the required tables exist;
     empty = body reports zero rows; parsed otherwise. Never raises.
+    sample_cap bounds samples (default SAMPLE_CAP; Chrome mixes visits + searches).
     """
     triage = result_skeleton(filename, fmt)
     try:
@@ -279,6 +338,6 @@ def triage_sqlite(
                       error=f"{type(exc).__name__}: {exc}")
         return triage
     triage["summary"] = summary
-    triage["samples"] = samples[:SAMPLE_CAP]
+    triage["samples"] = samples[:sample_cap]
     triage["status"] = "empty" if total_rows == 0 else "parsed"
     return triage

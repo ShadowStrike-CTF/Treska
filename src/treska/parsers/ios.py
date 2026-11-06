@@ -12,13 +12,16 @@ from typing import Any
 
 from treska.parsers.sqlite_triage import (
     SAMPLE_CAP,
+    TEXT_CAP,
     TOP_N,
     Schema,
+    count_map,
     count_table,
     epoch_to_iso,
     fetch_rows,
     has,
     need_column,
+    ranked,
     safe_count,
     safe_scalar,
     triage_sqlite,
@@ -248,6 +251,176 @@ def parse_ios_addressbook(path: Path, filename: str, work_dir: Path | None = Non
                           _addressbook_body, work_dir)
 
 
+# --- Phase 11: CallHistory.storedata, Safari History.db -------------------
+
+def cocoa_s_to_iso(value: Any) -> str | None:
+    """Convert Cocoa SECONDS (since 2001-01-01 UTC) to ISO 8601 UTC. Fixed unit —
+    no nanosecond heuristic (that is apple_to_iso, for sms.db / KnowledgeC only).
+    For ZCALLRECORD.ZDATE and Safari history_visits.visit_time. 0 or None → None."""
+    return epoch_to_iso(COCOA_EPOCH, value)
+
+
+def _callhistory_address(value: Any) -> str | None:
+    """ZCALLRECORD.ZADDRESS is a BLOB on some iOS versions. Named exception (Q3):
+    the ONLY blob Treska decodes — UTF-8 with errors="replace", TEXT_CAP applies.
+    Do not generalise: truncate() keeps mapping every other blob to None."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).decode("utf-8", errors="replace")[:TEXT_CAP]
+    return truncate(value)
+
+
+def _round_int(value: Any) -> int | None:
+    """REAL seconds (ZDURATION) -> int, rounded. None / blob / non-number -> None."""
+    if value is None or isinstance(value, (bytes, bytearray, memoryview, bool)):
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+CALL_TABLE = "ZCALLRECORD"
+
+
+def _callhistory_body(conn: sqlite3.Connection, schema: Schema, triage: dict[str, Any]):
+    summary: dict[str, Any] = {
+        "total": count_table(conn, schema, CALL_TABLE),
+        "incoming": None,
+        "outgoing": None,
+        "answered": None,
+        "missed": None,
+        "by_service": None,
+        "total_duration_seconds": None,
+        "first_call": None,
+        "last_call": None,
+    }
+    cols = {col: need_column(schema, triage, CALL_TABLE, col) for col in (
+        "ZORIGINATED", "ZANSWERED", "ZSERVICE_PROVIDER", "ZDURATION", "ZDATE", "ZADDRESS")}
+
+    if cols["ZORIGINATED"]:  # 0 = incoming, 1 = outgoing (unconfirmed — see CLAUDE.md)
+        summary["incoming"] = safe_count(
+            conn, "SELECT COUNT(*) FROM ZCALLRECORD WHERE ZORIGINATED = 0")
+        summary["outgoing"] = safe_count(
+            conn, "SELECT COUNT(*) FROM ZCALLRECORD WHERE ZORIGINATED = 1")
+        if cols["ZANSWERED"]:
+            summary["answered"] = safe_count(
+                conn, "SELECT COUNT(*) FROM ZCALLRECORD WHERE ZORIGINATED = 0 AND ZANSWERED = 1")
+            summary["missed"] = safe_count(
+                conn, "SELECT COUNT(*) FROM ZCALLRECORD WHERE ZORIGINATED = 0 AND ZANSWERED = 0")
+    if cols["ZSERVICE_PROVIDER"]:
+        summary["by_service"] = count_map(
+            conn, triage,
+            "SELECT ZSERVICE_PROVIDER, COUNT(*) AS n FROM ZCALLRECORD "
+            "GROUP BY ZSERVICE_PROVIDER ORDER BY n DESC, ZSERVICE_PROVIDER ASC")
+    if cols["ZDURATION"]:
+        summary["total_duration_seconds"] = _round_int(
+            safe_scalar(conn, "SELECT COALESCE(SUM(ZDURATION), 0) FROM ZCALLRECORD"))
+    if cols["ZDATE"]:  # ZDATE: Cocoa SECONDS
+        summary["first_call"] = cocoa_s_to_iso(
+            safe_scalar(conn, "SELECT MIN(ZDATE) FROM ZCALLRECORD WHERE ZDATE != 0"))
+        summary["last_call"] = cocoa_s_to_iso(
+            safe_scalar(conn, "SELECT MAX(ZDATE) FROM ZCALLRECORD WHERE ZDATE != 0"))
+
+    sql = (
+        "SELECT "
+        + ", ".join(col if cols[col] else "NULL" for col in (
+            "ZDATE", "ZORIGINATED", "ZADDRESS", "ZDURATION", "ZSERVICE_PROVIDER"))
+        + " FROM ZCALLRECORD ORDER BY " + ("ZDATE DESC, " if cols["ZDATE"] else "")
+        + "ROWID DESC LIMIT ?"
+    )
+    samples: list[dict] = []
+    for date, originated, address, duration, service in fetch_rows(conn, triage, sql, (SAMPLE_CAP,)):
+        samples.append({
+            "time": cocoa_s_to_iso(date),
+            "direction": "outgoing" if originated == 1 else "incoming" if originated == 0 else None,
+            "address": _callhistory_address(address),
+            "duration_seconds": _round_int(duration),
+            "service": truncate(service),
+        })
+
+    return summary, samples, summary["total"] or 0
+
+
+def parse_ios_callhistory(path: Path, filename: str, work_dir: Path | None = None) -> dict:
+    """Triage CallHistory.storedata. Required table: ZCALLRECORD.
+    Summary: total, incoming (ZORIGINATED=0), outgoing (ZORIGINATED=1), answered /
+             missed (incoming with ZANSWERED 1 / 0), by_service {ZSERVICE_PROVIDER: count},
+             total_duration_seconds, first_call, last_call (ZDATE, Cocoa seconds).
+    Samples: up to SAMPLE_CAP most-recent calls,
+             each with time, direction, address, duration_seconds, service."""
+    return triage_sqlite(path, filename, "ios_callhistory", (CALL_TABLE,),
+                         _callhistory_body, work_dir)
+
+
+SAFARI_REQUIRED = ("history_items", "history_visits")
+
+
+def _safari_body(conn: sqlite3.Connection, schema: Schema, triage: dict[str, Any]):
+    summary: dict[str, Any] = {
+        "url_count": count_table(conn, schema, "history_items"),
+        "visit_count": count_table(conn, schema, "history_visits"),
+        "domain_count": None,
+        "top_domains": None,
+        "first_visit": None,
+        "last_visit": None,
+    }
+    items = has(schema, "history_items")
+    visits = has(schema, "history_visits")
+    has_domain = items and need_column(schema, triage, "history_items", "domain_expansion")
+    has_url = items and need_column(schema, triage, "history_items", "url")
+    has_item_id = items and need_column(schema, triage, "history_items", "id")
+    has_time = visits and need_column(schema, triage, "history_visits", "visit_time")
+    has_title = visits and need_column(schema, triage, "history_visits", "title")
+    has_link = visits and need_column(schema, triage, "history_visits", "history_item")
+    join = has_item_id and has_link
+
+    if has_domain:
+        summary["domain_count"] = safe_count(
+            conn, "SELECT COUNT(DISTINCT domain_expansion) FROM history_items")
+        if join:  # visit-weighted
+            summary["top_domains"] = ranked(count_map(
+                conn, triage,
+                "SELECT i.domain_expansion, COUNT(*) FROM history_visits v "
+                "JOIN history_items i ON i.id = v.history_item GROUP BY i.domain_expansion"),
+                "domain")
+    if has_time:  # visit_time: Cocoa SECONDS
+        summary["first_visit"] = cocoa_s_to_iso(
+            safe_scalar(conn, "SELECT MIN(visit_time) FROM history_visits WHERE visit_time != 0"))
+        summary["last_visit"] = cocoa_s_to_iso(
+            safe_scalar(conn, "SELECT MAX(visit_time) FROM history_visits WHERE visit_time != 0"))
+
+    samples: list[dict] = []
+    if visits:
+        sql = (
+            "SELECT "
+            + ("v.visit_time" if has_time else "NULL") + ", "
+            + ("v.title" if has_title else "NULL") + ", "
+            + ("i.url" if join and has_url else "NULL")
+            + " FROM history_visits v"
+            + (" LEFT JOIN history_items i ON i.id = v.history_item" if join else "")
+            + " ORDER BY " + ("v.visit_time DESC, " if has_time else "") + "v.ROWID DESC LIMIT ?"
+        )
+        for visit_time, title, url in fetch_rows(conn, triage, sql, (SAMPLE_CAP,)):
+            samples.append({
+                "time": cocoa_s_to_iso(visit_time),
+                "title": truncate(title),
+                "url": truncate(url),
+            })
+
+    return summary, samples, (summary["url_count"] or 0) + (summary["visit_count"] or 0)
+
+
+def parse_ios_safari(path: Path, filename: str, work_dir: Path | None = None) -> dict:
+    """Triage Safari History.db. Required tables: history_items, history_visits.
+    Summary: url_count, visit_count, domain_count (history_items.domain_expansion),
+             top_domains [{domain, count}] (visit-weighted, TOP_N),
+             first_visit, last_visit (history_visits.visit_time, Cocoa seconds).
+    Samples: up to SAMPLE_CAP most-recent visits, each with time, title, url.
+    History.db is a generic name: core.pipeline skips (None) a non-SQLite file or one
+    missing either required table before this parser is called."""
+    return triage_sqlite(path, filename, "ios_safari", SAFARI_REQUIRED, _safari_body, work_dir)
+
+
 # Keyed by casefolded filename → (triage.format, parser). Dispatched from
 # core.pipeline.triage_file only when extraction_type is IOS_FFS and the file
 # carries the SQLite header.
@@ -255,4 +428,6 @@ IOS_ARTIFACTS: dict[str, tuple[str, Callable[..., dict]]] = {
     "sms.db": ("ios_sms", parse_ios_sms),
     "knowledgec.db": ("ios_knowledgec", parse_ios_knowledgec),
     "addressbook.sqlitedb": ("ios_addressbook", parse_ios_addressbook),
+    "callhistory.storedata": ("ios_callhistory", parse_ios_callhistory),
+    "history.db": ("ios_safari", parse_ios_safari),  # generic name — see pipeline
 }

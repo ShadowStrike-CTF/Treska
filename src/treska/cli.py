@@ -58,6 +58,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep the extracted temp dir; its path is printed to stderr",
     )
+    parser.add_argument(
+        "--no-flag-scan",
+        action="store_true",
+        help="Skip the CTF flag scan (flag_hits stays present: null in JSON)",
+    )
     return parser
 
 
@@ -77,7 +82,8 @@ def main() -> None:
 
     # Parse first: a parse error must never create or truncate the --out file.
     try:
-        result = parse_zip(path, keep=args.keep, no_hash=args.no_hash, on_extract=on_extract)
+        result = parse_zip(path, keep=args.keep, no_hash=args.no_hash, on_extract=on_extract,
+                           no_flag_scan=args.no_flag_scan)
     except Exception as exc:  # noqa: BLE001
         print(f"treska: parse error: {exc}", file=sys.stderr)
         sys.exit(EXIT_PARSE_ERROR)
@@ -133,8 +139,8 @@ def _or_dash(value: object) -> str:
 
 
 def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = False) -> None:
-    """Rich summary: counts, flagged files, SQLite schemas, EVTX triage, iOS and
-    Android artifact triage, deferred containers; verbose adds full inventory. The caller picks the Console
+    """Rich summary: counts, flag candidates, flagged files, SQLite schemas, EVTX
+    triage, iOS and Android artifact triage, deferred containers; verbose adds full inventory. The caller picks the Console
     (terminal or --out file) so there is exactly one renderer."""
     sqlite_entries = [e for e in result.inventory if e.sqlite_schema is not None]
     evtx_entries = [e for e in result.inventory if e.triage and e.triage.get("format") == "evtx"]
@@ -150,8 +156,12 @@ def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = Fals
         f"{len(evtx_entries)} EVTX · {len(ios_entries)} iOS · "
         f"{len(android_entries)} Android · "
         f"{len(result.deferred_files)} deferred · "
-        f"{mismatches} magic mismatch"
+        f"{mismatches} magic mismatch · "
+        + ("flag scan skipped" if result.flag_hits is None
+           else f"{len(result.flag_hits)} flag hits")
     )
+
+    _print_flag_hits(console, result.flag_hits)
 
     if result.flagged:
         table = Table(title="Flagged files", title_justify="left")
@@ -192,6 +202,17 @@ def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = Fals
 
     if verbose:
         _print_inventory(console, result.inventory)
+
+
+def _print_flag_hits(console: Console, flag_hits: list[dict] | None) -> None:
+    """Flag candidates first — the matches are CTF-controlled bytes: Text(), never markup."""
+    if not flag_hits:
+        return
+    console.print(Text(f"Flag candidates ({len(flag_hits)})", style="bold"))
+    for hit in flag_hits:
+        line = Text(f"  {hit['match']}", style="bold")
+        line.append(f"  {hit['path']} @ {hit['offset']} [{hit['encoding']}]")
+        console.print(line)
 
 
 def _print_evtx(console: Console, triage: dict) -> None:

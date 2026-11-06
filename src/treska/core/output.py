@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 # 1.2.0: added ParseResult.extraction_type (additive).
 # 1.3.0: new FileEntry.triage formats ios_sms / ios_knowledgec / ios_addressbook (additive).
 # 1.4.0: new FileEntry.triage formats android_mmssms / android_contacts / android_calllog (additive).
-SCHEMA_VERSION = "1.4.0"
+# 1.5.0: new FileEntry.triage formats ios_callhistory / ios_safari / android_chrome and
+#        ParseResult.flag_hits (additive).
+SCHEMA_VERSION = "1.5.0"
 
 
 @dataclass
@@ -40,10 +42,15 @@ class ParseResult:
     deferred_files: list[dict] = field(default_factory=list)
     # IOS_FFS / ANDROID_LOGICAL / UNKNOWN from core.detect.
     extraction_type: str = "UNKNOWN"
+    # core.flag_scan hits [{path, offset, encoding, match}]; None when the scan was skipped.
+    flag_hits: list[dict] | None = None
 
 
 def build_parse_result(
-    zip_path: str, entries: list[FileEntry], extraction_type: str = "UNKNOWN"
+    zip_path: str,
+    entries: list[FileEntry],
+    extraction_type: str = "UNKNOWN",
+    flag_hits: list[dict] | None = None,
 ) -> ParseResult:
     """inventory = all entries by path; flagged = the same objects with flags,
     most flags first (path breaks ties); deferred_files = containers to open
@@ -60,4 +67,5 @@ def build_parse_result(
             if e.triage is not None and e.triage.get("status") == "deferred"
         ],
         extraction_type=extraction_type,
+        flag_hits=flag_hits,
     )

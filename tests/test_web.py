@@ -45,9 +45,9 @@ def test_parse_result_structure():
     data = _post("sample.zip", SAMPLE_ZIP.read_bytes()).json()
     assert set(data) == {
         "schema_version", "zip_path", "file_count", "flagged", "inventory", "deferred_files",
-        "extraction_type",
+        "extraction_type", "flag_hits",
     }
-    assert data["schema_version"] == "1.4.0"
+    assert data["schema_version"] == "1.5.0"
     assert data["file_count"] == len(data["inventory"])
 
 

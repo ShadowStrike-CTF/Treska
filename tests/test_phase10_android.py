@@ -311,7 +311,8 @@ def test_android_triage_gated_on_extraction_type(tmp_path):
     # Case-insensitive names; non-artifact SQLite in an Android tree gets no triage.
     assert triage_file(sms_db, "MMSSMS.DB", "db", "x", "ANDROID_LOGICAL")["format"] == "android_mmssms"
     assert triage_file(sms_db, "telephony.db", "db", "x", "ANDROID_LOGICAL") is None
-    assert set(ANDROID_ARTIFACTS) == {"mmssms.db", "contacts2.db", "calllog.db"}
+    # Superset: Phase 11 adds artifacts; the full set is pinned in test_phase11.py.
+    assert set(ANDROID_ARTIFACTS) >= {"mmssms.db", "contacts2.db", "calllog.db"}
 
 
 def test_android_evidence_untouched(tmp_path):

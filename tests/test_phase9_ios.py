@@ -270,7 +270,8 @@ def test_ios_triage_gated_on_extraction_type(tmp_path):
     # Non-artifact SQLite in an iOS tree: no triage.
     other = fx.make_db(tmp_path / "Calendar.sqlitedb", fx.ADDRESSBOOK_DDL, [])
     assert triage_file(other, "Calendar.sqlitedb", "sqlitedb", "x", "IOS_FFS") is None
-    assert set(IOS_ARTIFACTS) == {"sms.db", "knowledgec.db", "addressbook.sqlitedb"}
+    # Superset: Phase 11 adds artifacts; the full set is pinned in test_phase11.py.
+    assert set(IOS_ARTIFACTS) >= {"sms.db", "knowledgec.db", "addressbook.sqlitedb"}
 
 
 def test_ios_case_insensitive_name(tmp_path):

@@ -12,15 +12,18 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from treska.parsers.sqlite_triage import (
     SAMPLE_CAP,
     Schema,
+    count_map,
     count_table,
     epoch_to_iso,
     fetch_rows,
     has,
     need_column,
+    ranked,
     safe_count,
     safe_scalar,
     triage_sqlite,
@@ -288,6 +291,123 @@ def parse_android_calllog(path: Path, filename: str, work_dir: Path | None = Non
     return triage_sqlite(path, filename, "android_calllog", ("calls",), _calllog_body, work_dir)
 
 
+# --- Phase 11: Chrome History ---------------------------------------------
+
+WEBKIT_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
+CHROME_REQUIRED = ("urls", "visits")
+# top_domains reads at most this many urls (most-visited first) — bounded, then
+# hosts are extracted in Python. Never in SQL.
+DOMAIN_ROW_CAP = 10_000
+
+
+def webkit_us_to_iso(value: Any) -> str | None:
+    """Convert WebKit/Chrome MICROSECONDS since 1601-01-01 UTC to ISO 8601 UTC.
+    For visits.visit_time and urls.last_visit_time. 0 or None → None."""
+    if value is None or isinstance(value, (bytes, bytearray, memoryview)):
+        return None
+    try:
+        seconds = float(value) / 1_000_000
+    except (TypeError, ValueError):
+        return None
+    return epoch_to_iso(WEBKIT_EPOCH, seconds)
+
+
+def _url_host(url: str) -> str | None:
+    try:
+        return urlparse(url).netloc or None
+    except ValueError:
+        return None
+
+
+def _chrome_body(conn: sqlite3.Connection, schema: Schema, triage: dict[str, Any]):
+    summary: dict[str, Any] = {
+        "url_count": count_table(conn, schema, "urls"),
+        "visit_count": count_table(conn, schema, "visits"),
+        "typed_count": None,
+        "search_term_count": None,
+        "top_domains": None,
+        "first_visit": None,
+        "last_visit": None,
+    }
+    urls = has(schema, "urls")
+    visits = has(schema, "visits")
+    searches = has(schema, "keyword_search_terms")
+    if not searches:
+        warn(triage, "missing table keyword_search_terms")
+
+    has_id = urls and need_column(schema, triage, "urls", "id")
+    has_url = urls and need_column(schema, triage, "urls", "url")
+    has_title = urls and need_column(schema, triage, "urls", "title")
+    has_typed = urls and need_column(schema, triage, "urls", "typed_count")
+    has_last = urls and need_column(schema, triage, "urls", "last_visit_time")
+    has_time = visits and need_column(schema, triage, "visits", "visit_time")
+    has_link = visits and need_column(schema, triage, "visits", "url")
+    join = has_id and has_link
+
+    if has_typed:
+        summary["typed_count"] = _int_or_none(
+            safe_scalar(conn, "SELECT COALESCE(SUM(typed_count), 0) FROM urls"))
+    if searches:
+        summary["search_term_count"] = count_table(conn, schema, "keyword_search_terms")
+    if join and has_url:
+        summary["top_domains"] = ranked(count_map(
+            conn, triage,
+            "SELECT u.url, COUNT(*) AS n FROM visits v JOIN urls u ON u.id = v.url "
+            "GROUP BY v.url ORDER BY n DESC, v.url ASC LIMIT ?",
+            (DOMAIN_ROW_CAP,), key=_url_host), "domain")
+    if has_time:  # visits.visit_time: WebKit MICROSECONDS
+        summary["first_visit"] = webkit_us_to_iso(
+            safe_scalar(conn, "SELECT MIN(visit_time) FROM visits WHERE visit_time != 0"))
+        summary["last_visit"] = webkit_us_to_iso(
+            safe_scalar(conn, "SELECT MAX(visit_time) FROM visits WHERE visit_time != 0"))
+
+    samples: list[dict] = []
+    if visits:
+        sql = (
+            "SELECT "
+            + ("v.visit_time" if has_time else "NULL") + ", "
+            + ("u.title" if join and has_title else "NULL") + ", "
+            + ("u.url" if join and has_url else "NULL")
+            + " FROM visits v"
+            + (" LEFT JOIN urls u ON u.id = v.url" if join else "")
+            + " ORDER BY " + ("v.visit_time DESC, " if has_time else "") + "v.ROWID DESC LIMIT ?"
+        )
+        for visit_time, title, url in fetch_rows(conn, triage, sql, (SAMPLE_CAP,)):
+            samples.append({"kind": "visit", "time": webkit_us_to_iso(visit_time),
+                            "title": truncate(title), "url": truncate(url), "term": None})
+    if searches and need_column(schema, triage, "keyword_search_terms", "term"):
+        search_join = has_id and need_column(schema, triage, "keyword_search_terms", "url_id")
+        sql = (
+            "SELECT "
+            + ("u.last_visit_time" if search_join and has_last else "NULL") + ", "
+            + ("u.title" if search_join and has_title else "NULL") + ", "
+            + ("u.url" if search_join and has_url else "NULL") + ", k.term"
+            + " FROM keyword_search_terms k"
+            + (" LEFT JOIN urls u ON u.id = k.url_id" if search_join else "")
+            + " ORDER BY " + ("u.last_visit_time DESC, " if search_join and has_last else "")
+            + "k.ROWID DESC LIMIT ?"
+        )
+        for last_visit, title, url, term in fetch_rows(conn, triage, sql, (SAMPLE_CAP,)):
+            samples.append({"kind": "search", "time": webkit_us_to_iso(last_visit),
+                            "title": truncate(title), "url": truncate(url), "term": truncate(term)})
+
+    total = sum(summary[k] or 0 for k in ("url_count", "visit_count", "search_term_count"))
+    return summary, samples, total
+
+
+def parse_android_chrome(path: Path, filename: str, work_dir: Path | None = None) -> dict:
+    """Triage Chrome History. Required tables: urls, visits (keyword_search_terms optional).
+    Summary: url_count, visit_count, typed_count (SUM urls.typed_count), search_term_count,
+             top_domains [{domain, count}] (TOP_N, host via urlparse in Python),
+             first_visit, last_visit (visits.visit_time, WebKit µs).
+    Samples (Q2): up to SAMPLE_CAP visits + up to SAMPLE_CAP search terms, uniform keys
+             kind, time, title, url, term.
+    History is a generic name: core.pipeline skips (None) a non-SQLite file or one
+    missing either required table before this parser is called."""
+    return triage_sqlite(path, filename, "android_chrome", CHROME_REQUIRED, _chrome_body,
+                         work_dir, sample_cap=2 * SAMPLE_CAP)
+
+
 # Keyed by casefolded filename → (triage.format, parser). Dispatched from
 # core.pipeline.triage_file only when extraction_type is ANDROID_LOGICAL and the
 # file carries the SQLite header.
@@ -295,4 +415,5 @@ ANDROID_ARTIFACTS: dict[str, tuple[str, Callable[..., dict]]] = {
     "mmssms.db": ("android_mmssms", parse_android_mmssms),
     "contacts2.db": ("android_contacts", parse_android_contacts),
     "calllog.db": ("android_calllog", parse_android_calllog),
+    "history": ("android_chrome", parse_android_chrome),  # generic name — see pipeline
 }
