@@ -62,9 +62,9 @@ def test_cli_valid_zip_json_structure():
     data = json.loads(_run(str(SAMPLE_ZIP), "--json").stdout)
     assert set(data) == {
         "schema_version", "zip_path", "file_count", "flagged", "inventory", "deferred_files",
-        "extraction_type",
+        "extraction_type", "flag_hits",
     }
-    assert data["schema_version"] == "1.4.0"
+    assert data["schema_version"] == "1.5.0"
     assert isinstance(data["zip_path"], str)
     assert data["file_count"] == len(data["inventory"])
     for entry in data["inventory"]:
@@ -89,7 +89,7 @@ def test_cli_out_json_writes_file(tmp_path):
     out = tmp_path / "result.json"
     proc = _run(str(SAMPLE_ZIP), "--json", "--out", str(out))
     assert proc.returncode == 0
-    assert json.loads(out.read_text(encoding="utf-8"))["schema_version"] == "1.4.0"
+    assert json.loads(out.read_text(encoding="utf-8"))["schema_version"] == "1.5.0"
     assert not (tmp_path / "result.json.partial").exists()
 
 
@@ -115,7 +115,7 @@ def test_cli_out_pretty_plain_text(tmp_path):
     assert proc.stdout == f"Written to: {out.resolve()}\n"
     text = out.read_text(encoding="utf-8")
     assert "\x1b[" not in text
-    assert "schema 1.4.0" in text and "files" in text and "flagged" in text
+    assert "schema 1.5.0" in text and "files" in text and "flagged" in text
     assert "Inventory" in text
 
 

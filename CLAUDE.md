@@ -419,7 +419,13 @@ Flag scan (Q6) — src/treska/core/flag_scan.py:
 - Each prefix matched as ASCII, UTF-16LE, and base64 at all three byte alignments
   (needles precomputed at module load). ASCII / UTF-16LE hits require the full
   prefix{…} with the closing brace; base64 hits are kept only if the decoded run contains
-  a full prefix{…}.
+  a full prefix{…}. Body = 1..MAX_BODY (256) printable ASCII excluding "{" and "}" —
+  excluding "{" stops an unclosed prefix swallowing the next one (found in testing).
+  Base64 runs may be line-wrapped (CR/LF stripped before decoding); B64_WINDOW = 4096
+  bytes each side. MAX_CANDIDATES = 10_000 needle hits verified per file bounds hostile
+  inputs. Throughput ≈ 0.6 s per 50 MiB (random data, this container).
+- Pre-existing tests/fixtures/sample.zip yields one hit: db/sample.db plants
+  flag{not_here} in a message body (make_fixtures.py) — expected, not a bug.
 - Hit: {path (zip-relative, = FileEntry.path), offset (file byte offset of the encoded hit),
   encoding ("ascii" | "utf-16le" | "base64"), match (≤ TEXT_CAP chars)}. Deduplicated by
   (path, match); sorted by (path, offset).
@@ -465,12 +471,21 @@ public schema knowledge; confirm on the first real extraction and update here.
 - Schema 1.4.0 → 1.5.0 (additive: three new triage.format values and ParseResult.flag_hits).
   CONTRACT["1.5.0"] added; 1.2.0 / 1.3.0 / 1.4.0 entries kept unchanged.
 - Package version 1.6.0 → 1.7.0 (new capability = MINOR)
-- Tests: 111 passed + 1 skipped (Poligon module) → target ~130 passed + 1 skipped
-  (tests/test_phase11.py + test_contract_1_5_0).
+- Tests: 111 passed + 1 skipped (Poligon module) → 135 passed + 1 skipped. 24 new:
+  23 in tests/test_phase11.py (synthetic DBs in tmp_path with real iOS / Chromium
+  table and column names; base64 alignment test parametrised ×3), 1 in
+  tests/test_contract.py (test_contract_1_5_0). Literal "1.4.0" assertions in
+  test_cli.py, test_web.py, test_core.py bumped to "1.5.0"; flag_hits added to their
+  exact result-key sets. test_contract_1_3_0 / _1_4_0 compare statuses over their own
+  formats only (fixtures gained Phase 11 artifacts); _1_4_0 now also pins version="1.4.0".
+- python-evtx needs `pip install --use-pep517 hexdump "python-evtx>=0.8.1"` on the
+  Python 3.13 container (old system setuptools) — environmental, not a code issue.
 - Fixtures: ios_sample.zip gains CallHistory.storedata (with -wal/-shm, one ZADDRESS stored
   as a BLOB) and a Safari History.db; android_sample.zip gains Chrome History with a planted
   flag{ph11} and a keyword_search_terms row; new flag_scan_sample.zip (.txt with a
-  base64-wrapped flag).
+  base64-wrapped flag next to Flag{…} / unclosed decoys). Regenerate with
+  python tests/fixtures/make_{ios,android,flag}_fixture.py. sample.zip unchanged.
+- Status: COMMIT B on claude/treska-phase11-ios-safari-chrome-flagscan, PR open, not merged.
 
 WHAT NOT TO DO (Phase 11):
 - Never modify apple_to_iso or any Phase 9/10 parser body — append only

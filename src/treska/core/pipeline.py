@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from treska.core import flag_scan
 from treska.core.detect import ANDROID_LOGICAL, IOS_FFS, UNKNOWN, detect_extraction_type
 from treska.core.hashing import compute_hashes
 from treska.core.heuristics import flag_file
@@ -15,10 +16,10 @@ from treska.core.inventory import build_inventory
 from treska.core.magic_check import check_magic
 from treska.core.output import FileEntry, ParseResult, build_parse_result
 from treska.core.sqlite_probe import is_sqlite, probe_sqlite
-from treska.parsers.android import ANDROID_ARTIFACTS
+from treska.parsers.android import ANDROID_ARTIFACTS, CHROME_REQUIRED
 from treska.parsers.evtx import EVTX_MAGIC, parse_evtx
-from treska.parsers.ios import IOS_ARTIFACTS
-from treska.parsers.sqlite_triage import result_skeleton
+from treska.parsers.ios import IOS_ARTIFACTS, SAFARI_REQUIRED
+from treska.parsers.sqlite_triage import has_all_tables, result_skeleton
 
 _EXTRACT = " to extract before submitting to Treska."
 
@@ -60,6 +61,16 @@ DEVICE_ARTIFACTS: dict[str, dict[str, tuple[str, Callable[..., dict]]]] = {
 }
 
 
+# Generic artifact names (Q1): other apps ship files called History / History.db, so
+# a match is only claimed when the file is SQLite AND has every required table.
+# Anything else is not ours: triage None, never corrupt. Casefolded names.
+GENERIC_ARTIFACT_NAMES = frozenset({"history", "history.db"})
+GENERIC_REQUIRED: dict[str, tuple[str, ...]] = {
+    "history.db": SAFARI_REQUIRED,
+    "history": CHROME_REQUIRED,
+}
+
+
 def _artifact_triage(
     artifacts: dict[str, tuple[str, Callable[..., dict]]],
     file_path: Path,
@@ -70,12 +81,19 @@ def _artifact_triage(
     the SQLite header.
 
     A known name without the header is reported corrupt, never skipped; a parser
-    exception becomes status "corrupt" so nothing escapes parse_zip.
+    exception becomes status "corrupt" so nothing escapes parse_zip. Exception:
+    a generic name (GENERIC_ARTIFACT_NAMES) that is not SQLite or lacks any
+    required table is skipped (None) — it is some other app's file.
     """
-    known = artifacts.get(Path(path).name.casefold())
+    name = Path(path).name.casefold()
+    known = artifacts.get(name)
     if known is None:
         return None
     fmt, parser = known
+    if name in GENERIC_ARTIFACT_NAMES and not (
+        is_sqlite(file_path) and has_all_tables(file_path, GENERIC_REQUIRED[name])
+    ):
+        return None
     if not is_sqlite(file_path):
         return {**result_skeleton(path, fmt), "status": "corrupt",
                 "error": "not a SQLite database"}
@@ -97,8 +115,9 @@ def triage_file(
     """Format-specific triage, dispatched on magic bytes first, extension second.
 
     EVTX -> parse_evtx dict; forensic container -> status "deferred"; in an
-    IOS_FFS tree, sms.db / KnowledgeC.db / AddressBook.sqlitedb -> iOS triage
-    dict; in an ANDROID_LOGICAL tree, mmssms.db / contacts2.db / calllog.db ->
+    IOS_FFS tree, sms.db / KnowledgeC.db / AddressBook.sqlitedb /
+    CallHistory.storedata / Safari History.db -> iOS triage dict; in an
+    ANDROID_LOGICAL tree, mmssms.db / contacts2.db / calllog.db / Chrome History ->
     Android triage dict; else None. A ".evtx" without the ElfFile header still goes to
     parse_evtx so it is reported as corrupt rather than silently skipped.
     work_dir is where WAL copies are staged (the parse temp dir).
@@ -128,6 +147,7 @@ def parse_zip(
     keep: bool = False,
     no_hash: bool = False,
     on_extract: Callable[[Path], None] | None = None,
+    no_flag_scan: bool = False,
 ) -> ParseResult:
     """Extract, identify, hash and flag every file in zip_path.
 
@@ -137,6 +157,8 @@ def parse_zip(
     The temp dir is removed before returning unless keep=True. on_extract, if
     given, is called with the temp dir right after extraction (how --keep
     learns where the files are) — the ParseResult schema stays unchanged.
+    The flag scan reads the extracted originals after hashing and before the
+    triage loop, so before any WAL copy exists; no_flag_scan=True -> flag_hits None.
     Raises ValueError for a missing or invalid zip.
     """
     zip_path = Path(zip_path)
@@ -150,6 +172,8 @@ def parse_zip(
         rows = build_inventory(files, zip_path, root=temp_dir)
         sizes = [row["size_bytes"] for row in rows]
         hashes = compute_hashes(files, skip=no_hash)
+        # Originals only: runs before the triage loop stages any .treska_wal copy.
+        flag_hits = flag_scan.scan_zip(files, root=temp_dir, skip=no_flag_scan)
         entries = []
         for file_path, row in zip(files, rows):
             magic_result = check_magic(file_path)
@@ -172,7 +196,8 @@ def parse_zip(
                     extraction_type, work_dir=temp_dir,
                 ),
             ))
-        return build_parse_result(str(zip_path), entries, extraction_type)
+        return build_parse_result(str(zip_path), entries, extraction_type,
+                                  flag_hits=flag_hits)
     finally:
         if not keep:
             cleanup(temp_dir)

@@ -5,8 +5,9 @@
 # Synthetic Android logical tree (no real case data): mmssms.db and contacts2.db
 # (each with an uncheckpointed -wal/-shm sidecar; contacts2.db also carries the
 # older embedded `calls` table) and calllog.db, using the real AOSP table and
-# column names. Also imported by tests/test_phase10_android.py for its DDL and
-# builders. make_db / zip_tree come from make_ios_fixture — one implementation.
+# column names. Phase 11 adds Chrome History (no extension) with a planted
+# flag{ph11} in a page title and a keyword_search_terms row. Also imported by
+# tests/test_phase10_android.py and tests/test_phase11.py for its DDL and builders. make_db / zip_tree come from make_ios_fixture — one implementation.
 
 from __future__ import annotations
 
@@ -28,6 +29,23 @@ DB_DIR = "data/data/com.android.providers.{}/databases"
 MMSSMS_PATH = DB_DIR.format("telephony") + "/mmssms.db"
 CONTACTS_PATH = DB_DIR.format("contacts") + "/contacts2.db"
 CALLLOG_PATH = DB_DIR.format("contacts") + "/calllog.db"
+CHROME_PATH = "data/data/com.android.chrome/app_chrome/Default/History"
+WEBKIT_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
+PLANTED_FLAG = "flag{ph11}"
+
+# Subset of the Chromium History schema (history_database / url_database).
+CHROME_DDL = """
+CREATE TABLE meta (key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY, value LONGVARCHAR);
+CREATE TABLE urls (id INTEGER PRIMARY KEY AUTOINCREMENT, url LONGVARCHAR, title LONGVARCHAR,
+    visit_count INTEGER DEFAULT 0 NOT NULL, typed_count INTEGER DEFAULT 0 NOT NULL,
+    last_visit_time INTEGER NOT NULL, hidden INTEGER DEFAULT 0 NOT NULL);
+CREATE TABLE visits (id INTEGER PRIMARY KEY AUTOINCREMENT, url INTEGER NOT NULL,
+    visit_time INTEGER NOT NULL, from_visit INTEGER, transition INTEGER DEFAULT 0 NOT NULL,
+    segment_id INTEGER, visit_duration INTEGER DEFAULT 0 NOT NULL,
+    incremented_omnibox_typed_score BOOLEAN DEFAULT FALSE NOT NULL);
+CREATE TABLE keyword_search_terms (keyword_id INTEGER NOT NULL, url_id INTEGER NOT NULL,
+    term LONGVARCHAR NOT NULL, normalized_term LONGVARCHAR NOT NULL);
+"""
 
 # Subset of the AOSP TelephonyProvider schema (MmsSmsDatabaseHelper).
 MMSSMS_DDL = """
@@ -142,6 +160,33 @@ def call(rowid: int, number: str | None, date_ms: int, duration: int, call_type:
     )
 
 
+def webkit_us(dt: datetime) -> int:
+    """datetime (UTC) -> WebKit/Chrome microseconds since 1601-01-01."""
+    return int((dt - WEBKIT_EPOCH).total_seconds()) * 1_000_000
+
+
+def chrome_url(url_id: int, url: str, title: str | None, last_visit_us: int,
+               visits: int = 1, typed: int = 0):
+    return (
+        "INSERT INTO urls (id, url, title, visit_count, typed_count, last_visit_time) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (url_id, url, title, visits, typed, last_visit_us),
+    )
+
+
+def chrome_visit(visit_id: int, url_id: int, visit_us: int):
+    return ("INSERT INTO visits (id, url, visit_time) VALUES (?, ?, ?)",
+            (visit_id, url_id, visit_us))
+
+
+def chrome_search(url_id: int, term: str, keyword_id: int = 2):
+    return (
+        "INSERT INTO keyword_search_terms (keyword_id, url_id, term, normalized_term) "
+        "VALUES (?, ?, ?, ?)",
+        (keyword_id, url_id, term, term.lower()),
+    )
+
+
 def build_android_tree(root: Path) -> list[Path]:
     """Write the sample Android logical tree under root; return every file written."""
     root = Path(root)
@@ -196,9 +241,25 @@ def build_android_tree(root: Path) -> list[Path]:
         ],
     )
 
+    w = lambda minutes: webkit_us(at(minutes))  # noqa: E731
+    chrome = make_db(
+        root / CHROME_PATH, CHROME_DDL,
+        rows=[
+            chrome_url(1, "https://maps.example.com/locker?id=12", "Locker map", w(31), 2, 1),
+            chrome_url(2, "https://www.google.com/search?q=locker+12+key",
+                       "locker 12 key - Google Search", w(32), 1, 0),
+            chrome_url(3, "https://paste.example.net/raw/abc", PLANTED_FLAG, w(33), 1, 1),
+            chrome_visit(1, 1, w(30)),
+            chrome_visit(2, 1, w(31)),
+            chrome_visit(3, 2, w(32)),
+            chrome_visit(4, 3, w(33)),
+            chrome_search(2, "locker 12 key"),
+        ],
+    )
+
     readme = root / "readme.txt"
     readme.write_bytes(b"Treska synthetic Android logical fixture.\n")
-    written = [mmssms, contacts, calllog, readme]
+    written = [mmssms, contacts, calllog, chrome, readme]
     for db in (mmssms, contacts):
         written += [Path(str(db) + s) for s in ("-wal", "-shm") if Path(str(db) + s).is_file()]
     return sorted(written)
