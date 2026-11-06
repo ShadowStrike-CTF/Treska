@@ -366,3 +366,123 @@ WHAT NOT TO DO (Phase 10):
 - Never add third-party dependencies
 - Never remove or rename any 1.3.0 field — change must be additive only
 - Never use git add -A
+
+## Phase 11 (v1.7.0) — iOS call history, Safari, Chrome history, flag scan
+M/1.1.14. Three new device artifacts plus a raw-byte flag scanner, all through parse_zip()
+(CLI, web and Sarissa get them for free — no parsing logic in cli.py or web/main.py).
+
+New triage.format values (same 9-key triage dict and status rules as Phase 9/10):
+- `ios_callhistory` — CallHistory.storedata (required table: ZCALLRECORD)
+  summary: total, incoming (ZORIGINATED=0), outgoing (ZORIGINATED=1), answered (incoming,
+  ZANSWERED=1), missed (incoming, ZANSWERED=0), by_service {ZSERVICE_PROVIDER: count},
+  total_duration_seconds (int(round(SUM ZDURATION))), first_call / last_call (ZDATE)
+  samples: ≤ SAMPLE_CAP most-recent {time, direction, address, duration_seconds, service}
+- `ios_safari` — History.db (required tables: history_items, history_visits)
+  summary: url_count, visit_count, domain_count (DISTINCT history_items.domain_expansion;
+  null + warning when the column is absent), top_domains [{domain, count}] (visit-weighted,
+  TOP_N), first_visit / last_visit (history_visits.visit_time)
+  samples: ≤ SAMPLE_CAP most-recent visits {time, title, url}
+- `android_chrome` — History, no extension (required tables: urls, visits;
+  keyword_search_terms optional)
+  summary: url_count, visit_count, typed_count (SUM urls.typed_count), search_term_count
+  (null + warning when no keyword_search_terms), top_domains [{domain, count}] (TOP_N;
+  host via urllib.parse.urlparse(url).netloc in Python over a bounded query —
+  DOMAIN_ROW_CAP urls by visit count — never in SQL), first_visit / last_visit (visits.visit_time)
+  samples (Q2): ≤ SAMPLE_CAP visits + ≤ SAMPLE_CAP search terms, uniform keys
+  {kind, time, title, url, term}. Visits: kind "visit", term null. Searches: kind "search",
+  term from keyword_search_terms.term, url/title from the joined urls row (k.url_id = u.id),
+  time from urls.last_visit_time.
+
+Timestamp units (INV-P10-1 still applies — fixed per column, never guessed):
+- ZCALLRECORD.ZDATE, history_visits.visit_time → Cocoa SECONDS → `cocoa_s_to_iso()` (ios.py;
+  epoch_to_iso(COCOA_EPOCH, value), no nanosecond heuristic). `apple_to_iso` is NOT used
+  and NOT modified.
+- visits.visit_time, urls.last_visit_time → WebKit MICROSECONDS since 1601-01-01 UTC →
+  `webkit_us_to_iso()` (android.py).
+
+ZADDRESS (Q3): stored as a BLOB on some iOS versions. Named exception — decoded as UTF-8
+with errors="replace", TEXT_CAP applies. This is the ONLY blob Treska decodes; do not
+generalise (truncate() still maps every other blob to null).
+
+Generic-name dispatch (Q1): `History.db` and `History` are generic names
+(pipeline.GENERIC_ARTIFACT_NAMES = {"history", "history.db"}). In _artifact_triage, a
+generic-named file that is not SQLite, or lacks ANY of its parser's required tables
+(sqlite_triage.has_all_tables, immutable read-only open of the original), gets triage None
+— not corrupt. Every other artifact name keeps the corrupt-not-skipped rule. A parser
+exception on a claimed generic DB is still corrupt.
+Known limitation: a generic-named DB whose tables exist only in an uncheckpointed -wal is
+skipped (the pre-check never replays a WAL).
+
+Flag scan (Q6) — src/treska/core/flag_scan.py:
+- FLAG_PREFIXES = ("flag{", "ctf{", "FLAG{", "CTF{") — exact case; "Flag{" never matches.
+- FLAG_HIT_CAP = 50 total, PER_FILE_CAP = 10, CHUNK_SIZE = 1 MiB, overlap = max prefix len × 4.
+- Each prefix matched as ASCII, UTF-16LE, and base64 at all three byte alignments
+  (needles precomputed at module load). ASCII / UTF-16LE hits require the full
+  prefix{…} with the closing brace; base64 hits are kept only if the decoded run contains
+  a full prefix{…}.
+- Hit: {path (zip-relative, = FileEntry.path), offset (file byte offset of the encoded hit),
+  encoding ("ascii" | "utf-16le" | "base64"), match (≤ TEXT_CAP chars)}. Deduplicated by
+  (path, match); sorted by (path, offset).
+- scan_zip runs after hashing, before the per-file triage loop — so before any WAL copy is
+  staged — and only over extracted originals; it also refuses any .treska_wal path.
+  ThreadPoolExecutor only. Raw bytes only: never decompresses or recurses into archives,
+  never opens SQLite (a .db's raw bytes are scanned like any other file). Every per-file
+  scan is wrapped so nothing escapes parse_zip.
+- ParseResult.flag_hits: list | None — null when skipped, key always present.
+- CLI `--no-flag-scan` → flag_hits null; summary line shows `N flag hits` or
+  `flag scan skipped`; `_print_flag_hits` uses Text() only. Web always scans (no opt-out);
+  `r-flaghits` stat + "Flag candidates" section first, `renderFlagHits()` el()/textContent only.
+
+sqlite_triage.py additions (shared, never copied into parsers): `count_map` (GROUP BY →
+{label: count}, None/blob label → "unknown", optional Python key fold, warning on error),
+`ranked` ({label: count} → [{label_key, count}] top N), `has_all_tables` (generic-name
+pre-check), `triage_sqlite(..., sample_cap=SAMPLE_CAP)` (Chrome passes 2 × SAMPLE_CAP).
+
+Decisions (M/1.1.14):
+- Q1 generic names → None, not corrupt (pre-check in pipeline, not in the parser).
+- Q2 Chrome search terms are samples, not a separate triage dict.
+- Q3 ZADDRESS blob decode is the single named exception.
+- Q6 `--no-flag-scan` CLI only; web always scans.
+- Q8 Magnet CTF 2025/2026 images not available — field semantics below are unconfirmed.
+- Phase 9/10 tests pinning the exact IOS_ARTIFACTS / ANDROID_ARTIFACTS key sets relaxed to
+  a superset of their original names; the full Phase 11 sets are pinned in test_phase11.py.
+- Contract: a pinned older CONTRACT version (`version=`) accepts additive top-level keys
+  (superset); the current version stays exact.
+
+### Phase 11 — unconfirmed field semantics
+Not verified against real images (Q8: no Magnet CTF 2025/2026 images available). Built from
+public schema knowledge; confirm on the first real extraction and update here.
+- ZCALLRECORD.ZORIGINATED: 0 = incoming, 1 = outgoing.
+- ZCALLRECORD.ZANSWERED: 1 = answered; missed = incoming with ZANSWERED = 0.
+- ZCALLRECORD.ZSERVICE_PROVIDER values (e.g. com.apple.Telephony, com.apple.FaceTime,
+  third-party bundle IDs) — counted verbatim, not interpreted.
+- ZCALLRECORD.ZADDRESS: BLOB on some iOS versions, assumed UTF-8 text bytes.
+- ZCALLRECORD.ZDATE: Cocoa seconds (REAL). ZDURATION: seconds (REAL), rounded to int.
+- Safari history_visits.visit_time: Cocoa seconds (REAL).
+- Chrome keyword_search_terms: present in modern Chrome History; joined via
+  keyword_search_terms.url_id = urls.id.
+
+- Schema 1.4.0 → 1.5.0 (additive: three new triage.format values and ParseResult.flag_hits).
+  CONTRACT["1.5.0"] added; 1.2.0 / 1.3.0 / 1.4.0 entries kept unchanged.
+- Package version 1.6.0 → 1.7.0 (new capability = MINOR)
+- Tests: 111 passed + 1 skipped (Poligon module) → target ~130 passed + 1 skipped
+  (tests/test_phase11.py + test_contract_1_5_0).
+- Fixtures: ios_sample.zip gains CallHistory.storedata (with -wal/-shm, one ZADDRESS stored
+  as a BLOB) and a Safari History.db; android_sample.zip gains Chrome History with a planted
+  flag{ph11} and a keyword_search_terms row; new flag_scan_sample.zip (.txt with a
+  base64-wrapped flag).
+
+WHAT NOT TO DO (Phase 11):
+- Never modify apple_to_iso or any Phase 9/10 parser body — append only
+- Never guess the Cocoa / WebKit unit from the value
+- Never decode any blob other than ZCALLRECORD.ZADDRESS
+- Never report a generic-named non-match (History / History.db) as corrupt
+- Never change the corrupt-not-skipped rule for non-generic artifact names
+- Never run the flag scan on .treska_wal copies, never decompress or recurse into archives,
+  never open SQLite from flag_scan
+- Never match flag prefixes case-insensitively
+- Never extract URL hosts in SQL — urlparse in Python over a bounded result
+- Never render flag matches or sample text with innerHTML or rich markup
+- Never expose a flag-scan opt-out in the web UI
+- Never use ProcessPoolExecutor
+- Never use git add -A
