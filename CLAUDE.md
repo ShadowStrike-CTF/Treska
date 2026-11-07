@@ -485,7 +485,7 @@ public schema knowledge; confirm on the first real extraction and update here.
   flag{ph11} and a keyword_search_terms row; new flag_scan_sample.zip (.txt with a
   base64-wrapped flag next to Flag{…} / unclosed decoys). Regenerate with
   python tests/fixtures/make_{ios,android,flag}_fixture.py. sample.zip unchanged.
-- Status: COMMIT B on claude/treska-phase11-ios-safari-chrome-flagscan, PR open, not merged.
+- Status: COMPLETE — merged to main (ShadowStrike-CTF/Treska#16, bf21a37).
 
 WHAT NOT TO DO (Phase 11):
 - Never modify apple_to_iso or any Phase 9/10 parser body — append only
@@ -499,5 +499,118 @@ WHAT NOT TO DO (Phase 11):
 - Never extract URL hosts in SQL — urlparse in Python over a bounded result
 - Never render flag matches or sample text with innerHTML or rich markup
 - Never expose a flag-scan opt-out in the web UI
+- Never use ProcessPoolExecutor
+- Never use git add -A
+
+## Phase 12 (v1.8.0) — WhatsApp triage (Android + iOS)
+M/1.1.15. Read-only WhatsApp triage through parse_zip() (CLI, web and Sarissa get it for
+free — no WhatsApp logic in cli.py, web/main.py or index.html; `_print_device` /
+`renderDevice` already render any `ios_*` / `android_*` triage with Text()/textContent).
+No design doc was committed — the M/1.1.15 prompt's CONSTRAINTS section is the spec.
+
+New triage.format values (same 9-key triage dict and status rules as Phase 9–11):
+- `android_whatsapp` — msgstore.db. Modern layout `message` + `chat` + `jid`
+  (message.chat_row_id → chat._id, chat.jid_row_id → jid._id, contact = jid.raw_string) OR
+  legacy `messages` (rows with key_remote_jid = '-1' skipped). Contact names from an optional
+  sibling `wa.db` (`wa_contacts.jid → display_name`, ≤ WA_NAME_CAP = 50,000 rows).
+- `ios_whatsapp` — ChatStorage.sqlite (required tables: ZWAMESSAGE, ZWACHATSESSION;
+  ZWAPROFILEPUSHNAME optional). ZWAMESSAGE LEFT JOIN ZWACHATSESSION on Z_PK = ZCHATSESSION;
+  name = COALESCE(push name via scalar subquery ZWAPROFILEPUSHNAME.ZJID = ZCONTACTJID LIMIT 1,
+  ZWACHATSESSION.ZPARTNERNAME). Scalar subquery, not a JOIN: duplicate push-name rows must not
+  multiply messages.
+
+Summary (10 keys, identical on both platforms): message_count, sent_count, received_count,
+media_only_count, chat_count, group_chat_count, first_message, last_message,
+contact_names_resolved (bool), schema_layout ("modern" | "legacy" | "coredata").
+Sample (8 keys, identical on both platforms — `whatsapp_record()`):
+{kind: "whatsapp_msg", timestamp, direction ("sent" | "received" | null), contact,
+contact_name, is_group (bool), body (str — "" for NULL), platform ("android" | "ios")}.
+≤ SAMPLE_CAP most recent: ORDER BY timestamp DESC, ROWID DESC.
+- contact: `strip_jid()` drops `@s.whatsapp.net` / `@g.us`; any other suffix (`@lid`,
+  `@broadcast`) stays verbatim; TEXT_CAP. is_group: JID ends in `@g.us`.
+- body: NULL → ""; a blob body is never decoded → "" (ZADDRESS stays the only decoded blob).
+
+Timestamp units (INV-P10-1 — fixed per column, never guessed):
+- message.timestamp / messages.timestamp → Unix MILLISECONDS → `unix_ms_to_iso` (android.py)
+- ZWAMESSAGE.ZMESSAGEDATE → Cocoa SECONDS → `cocoa_s_to_iso` (ios.py). NEVER apple_to_iso.
+
+Files:
+- sqlite_triage.py (shared): `strip_jid`, `is_group_jid`, `whatsapp_record`,
+  `whatsapp_summary` (10-key skeleton), `has_any_table_set` (generic-name pre-check over
+  alternative table sets; same immutable open as `has_all_tables`, which is kept).
+- android.py: `parse_android_whatsapp`, `_wa_names`, `WHATSAPP_MODERN`, `WHATSAPP_LEGACY`,
+  `WHATSAPP_ALTERNATIVES`; `ANDROID_ARTIFACTS["msgstore.db"]`. The parser calls triage_sqlite
+  with both layouts' tables as `required` and drops the "missing table" warnings of the
+  layout not in use.
+- ios.py: `parse_ios_whatsapp`, `WHATSAPP_IOS_REQUIRED`; `IOS_ARTIFACTS["chatstorage.sqlite"]`.
+- pipeline.py: `GENERIC_ARTIFACT_NAMES` += msgstore.db, chatstorage.sqlite. `GENERIC_REQUIRED`
+  is now name → tuple of alternative table sets (Safari / Chrome wrapped as one-set tuples);
+  `_artifact_triage` uses `has_any_table_set`. detect.py unchanged.
+
+WAL: Phase 9 Option A for msgstore.db, wa.db and ChatStorage.sqlite (wa.db is opened through
+open_evidence with a scratch skeleton; its warnings are copied onto the msgstore triage
+prefixed "wa.db: "). Flag scan: no change — the raw-byte scan already reads msgstore.db,
+ChatStorage.sqlite and their -wal sidecars (a flag only in an uncheckpointed -wal is a hit on
+the `-wal` path).
+
+Decisions (M/1.1.15):
+- Q2 One uniform 8-key sample record for both platforms (`whatsapp_record`).
+- Q4 wa.db is a sibling name source only — NOT a dispatch entry (its triage stays None).
+  Absent / corrupt / no wa_contacts → warning + empty map; msgstore.db never fails on wa.db.
+- Q5 msgstore.db and ChatStorage.sqlite are generic names; msgstore.db is claimed by either
+  complete set (message, chat, jid) or (messages). Wrong tables → triage None, not corrupt.
+- Q7 iOS uses LEFT JOINs: a message whose chat session is gone is kept (contact null) and
+  "N messages reference a missing chat session" is warned.
+- Q10 10-key summary on both platforms; `wa_db_used` dropped (R, M/1.1.15) —
+  contact_names_resolved is true on Android when wa.db yielded ≥ 1 name, on iOS when any
+  ZPUSHNAME / ZPARTNERNAME is non-empty.
+- media_only_count: body NULL AND type != 0 (message.message_type / messages.media_wa_type /
+  ZMESSAGETYPE); without the type column every NULL body counts, with a warning.
+
+Known limitation (by design, detect.py frozen): detect.py has no WhatsApp marker. A tree whose
+only content is WhatsApp (no other iOS / Android marker) stays UNKNOWN and gets no triage —
+`AppDomainGroup-*` does NOT match the `AppDomain-*` iOS marker.
+
+### Phase 12 — unconfirmed field semantics
+Not verified against real images; built from public schema knowledge. Confirm on the first
+real extraction and update here.
+- message.message_type / ZWAMESSAGE.ZMESSAGETYPE 0 = text; messages.media_wa_type '0' = text.
+- jid.raw_string holds the full JID (user@server); chat.jid_row_id → jid._id.
+- Legacy messages.key_remote_jid = '-1' marks a system/placeholder row.
+- message.from_me / messages.key_from_me / ZISFROMME: 1 = sent, 0 = received.
+- ZWAPROFILEPUSHNAME.ZJID matches ZWACHATSESSION.ZCONTACTJID verbatim.
+- ZMESSAGEDATE is Cocoa seconds (REAL), message.timestamp Unix ms.
+- wa_contacts.display_name is the address-book name for wa_contacts.jid.
+
+- Schema 1.5.0 → 1.6.0 (additive: two new triage.format values). CONTRACT["1.6.0"] added;
+  1.2.0–1.5.0 entries unchanged. test_contract_1_5_0 now pins version="1.5.0" and compares
+  statuses over its own formats only (fixtures gained Phase 12 artifacts); its Android flag
+  assert became "flag{ph11} ∈ matches". Literal "1.5.0" asserts in test_cli.py, test_web.py,
+  test_core.py bumped to "1.6.0". test_phase11 dispatch pins relaxed to supersets.
+- Package version 1.7.0 → 1.8.0 (new capability = MINOR)
+- Tests: 135 passed → 159 passed (24 new: 23 in tests/test_phase12_whatsapp.py, 1 in
+  tests/test_contract.py — test_contract_1_6_0).
+- Poligon integration module: with poligon installed it is collected, not skipped; 3 of its
+  9 parametrised cases fail on main already (since Phase 11 the flag scan reports the Template F
+  flag, which the test asserts must never appear in output). Pre-existing — not a Phase 12
+  regression; needs a Poligon-side decision.
+- Fixtures: android_sample.zip gains data/data/com.whatsapp/databases/msgstore.db (modern,
+  -wal/-shm, flag{ph12}) + wa.db; ios_sample.zip gains
+  AppDomainGroup-group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite (-wal/-shm, flag{ph12}).
+  Regenerate with python tests/fixtures/make_{ios,android}_fixture.py.
+
+WHAT NOT TO DO (Phase 12):
+- Never put WhatsApp logic in cli.py, web/main.py or index.html
+- Never copy sqlite_triage helpers into android.py / ios.py — import them
+- Never add wa.db to a dispatch table, and never fail msgstore.db because of wa.db
+- Never use apple_to_iso for ZMESSAGEDATE — cocoa_s_to_iso only
+- Never guess epoch units from the value
+- Never decode a blob body (only ZCALLRECORD.ZADDRESS is ever decoded)
+- Never follow paths stored in a DB (media paths, thumbnails) to open other files
+- Never JOIN ZWAPROFILEPUSHNAME (duplicates multiply messages) — scalar subquery LIMIT 1
+- Never report a wrong-table msgstore.db / ChatStorage.sqlite as corrupt — triage None
+- Never modify detect.py or make extraction_type multi-valued
+- Never remove or rename any 1.5.0 field — change must be additive only
+- Never render sample text with innerHTML or rich markup
 - Never use ProcessPoolExecutor
 - Never use git add -A
