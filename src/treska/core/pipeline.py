@@ -16,10 +16,10 @@ from treska.core.inventory import build_inventory
 from treska.core.magic_check import check_magic
 from treska.core.output import FileEntry, ParseResult, build_parse_result
 from treska.core.sqlite_probe import is_sqlite, probe_sqlite
-from treska.parsers.android import ANDROID_ARTIFACTS, CHROME_REQUIRED
+from treska.parsers.android import ANDROID_ARTIFACTS, CHROME_REQUIRED, WHATSAPP_ALTERNATIVES
 from treska.parsers.evtx import EVTX_MAGIC, parse_evtx
-from treska.parsers.ios import IOS_ARTIFACTS, SAFARI_REQUIRED
-from treska.parsers.sqlite_triage import has_all_tables, result_skeleton
+from treska.parsers.ios import IOS_ARTIFACTS, SAFARI_REQUIRED, WHATSAPP_IOS_REQUIRED
+from treska.parsers.sqlite_triage import has_any_table_set, result_skeleton
 
 _EXTRACT = " to extract before submitting to Treska."
 
@@ -61,13 +61,16 @@ DEVICE_ARTIFACTS: dict[str, dict[str, tuple[str, Callable[..., dict]]]] = {
 }
 
 
-# Generic artifact names (Q1): other apps ship files called History / History.db, so
-# a match is only claimed when the file is SQLite AND has every required table.
-# Anything else is not ours: triage None, never corrupt. Casefolded names.
-GENERIC_ARTIFACT_NAMES = frozenset({"history", "history.db"})
-GENERIC_REQUIRED: dict[str, tuple[str, ...]] = {
-    "history.db": SAFARI_REQUIRED,
-    "history": CHROME_REQUIRED,
+# Generic artifact names (Q1): other apps ship files called History / History.db (and,
+# Phase 12, msgstore.db / ChatStorage.sqlite), so a match is only claimed when the file
+# is SQLite AND has every table of at least one alternative set. Anything else is not
+# ours: triage None, never corrupt. Casefolded names.
+GENERIC_ARTIFACT_NAMES = frozenset({"history", "history.db", "msgstore.db", "chatstorage.sqlite"})
+GENERIC_REQUIRED: dict[str, tuple[tuple[str, ...], ...]] = {
+    "history.db": (SAFARI_REQUIRED,),
+    "history": (CHROME_REQUIRED,),
+    "msgstore.db": WHATSAPP_ALTERNATIVES,  # modern (message, chat, jid) OR legacy (messages)
+    "chatstorage.sqlite": (WHATSAPP_IOS_REQUIRED,),
 }
 
 
@@ -82,8 +85,8 @@ def _artifact_triage(
 
     A known name without the header is reported corrupt, never skipped; a parser
     exception becomes status "corrupt" so nothing escapes parse_zip. Exception:
-    a generic name (GENERIC_ARTIFACT_NAMES) that is not SQLite or lacks any
-    required table is skipped (None) — it is some other app's file.
+    a generic name (GENERIC_ARTIFACT_NAMES) that is not SQLite or lacks every
+    alternative required-table set is skipped (None) — it is some other app's file.
     """
     name = Path(path).name.casefold()
     known = artifacts.get(name)
@@ -91,7 +94,7 @@ def _artifact_triage(
         return None
     fmt, parser = known
     if name in GENERIC_ARTIFACT_NAMES and not (
-        is_sqlite(file_path) and has_all_tables(file_path, GENERIC_REQUIRED[name])
+        is_sqlite(file_path) and has_any_table_set(file_path, GENERIC_REQUIRED[name])
     ):
         return None
     if not is_sqlite(file_path):
@@ -116,8 +119,9 @@ def triage_file(
 
     EVTX -> parse_evtx dict; forensic container -> status "deferred"; in an
     IOS_FFS tree, sms.db / KnowledgeC.db / AddressBook.sqlitedb /
-    CallHistory.storedata / Safari History.db -> iOS triage dict; in an
-    ANDROID_LOGICAL tree, mmssms.db / contacts2.db / calllog.db / Chrome History ->
+    CallHistory.storedata / Safari History.db / WhatsApp ChatStorage.sqlite -> iOS
+    triage dict; in an ANDROID_LOGICAL tree, mmssms.db / contacts2.db / calllog.db /
+    Chrome History / WhatsApp msgstore.db ->
     Android triage dict; else None. A ".evtx" without the ElfFile header still goes to
     parse_evtx so it is reported as corrupt rather than silently skipped.
     work_dir is where WAL copies are staged (the parse temp dir).

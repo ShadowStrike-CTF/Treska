@@ -281,10 +281,12 @@ def test_chrome_generic_name_skipped_not_corrupt(tmp_path):
 
 
 def test_phase11_dispatch_tables_pinned():
-    assert set(IOS_ARTIFACTS) == {"sms.db", "knowledgec.db", "addressbook.sqlitedb",
+    # Superset since Phase 12 (WhatsApp); the full Phase 12 sets are pinned in
+    # tests/test_phase12_whatsapp.py.
+    assert set(IOS_ARTIFACTS) >= {"sms.db", "knowledgec.db", "addressbook.sqlitedb",
                                   "callhistory.storedata", "history.db"}
-    assert set(ANDROID_ARTIFACTS) == {"mmssms.db", "contacts2.db", "calllog.db", "history"}
-    assert GENERIC_ARTIFACT_NAMES == frozenset({"history", "history.db"})
+    assert set(ANDROID_ARTIFACTS) >= {"mmssms.db", "contacts2.db", "calllog.db", "history"}
+    assert GENERIC_ARTIFACT_NAMES >= frozenset({"history", "history.db"})
     assert IOS_ARTIFACTS["callhistory.storedata"][0] == "ios_callhistory"
     assert IOS_ARTIFACTS["history.db"][0] == "ios_safari"
     assert ANDROID_ARTIFACTS["history"][0] == "android_chrome"

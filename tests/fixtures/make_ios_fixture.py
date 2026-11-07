@@ -5,7 +5,9 @@
 # Synthetic iOS FFS tree (no real case data): sms.db (with an uncheckpointed
 # -wal/-shm sidecar), knowledgeC.db and AddressBook.sqlitedb, using the real iOS
 # table and column names. Phase 11 adds CallHistory.storedata (uncheckpointed
-# -wal/-shm, one ZADDRESS stored as a BLOB) and Safari History.db. Also imported by tests/test_phase9_ios.py for its DDL
+# -wal/-shm, one ZADDRESS stored as a BLOB) and Safari History.db. Phase 12 adds WhatsApp
+# ChatStorage.sqlite (uncheckpointed -wal/-shm, push names, a group session, a media-only
+# row, flag{ph12} in one body). Also imported by tests/test_phase9_ios.py for its DDL
 # and builders, so there is one source of the synthetic schemas.
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ KNOWLEDGEC_PATH = "private/var/mobile/Library/CoreDuet/Knowledge/knowledgeC.db"
 ADDRESSBOOK_PATH = "HomeDomain/Library/AddressBook/AddressBook.sqlitedb"
 CALLHISTORY_PATH = "private/var/mobile/Library/CallHistoryDB/CallHistory.storedata"
 SAFARI_PATH = "private/var/mobile/Library/Safari/History.db"
+CHATSTORAGE_PATH = "AppDomainGroup-group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite"
+PHASE12_FLAG = "flag{ph12}"
 
 SMS_DDL = """
 CREATE TABLE handle (ROWID INTEGER PRIMARY KEY AUTOINCREMENT UNIQUE, id TEXT NOT NULL,
@@ -82,6 +86,19 @@ CREATE TABLE history_visits (id INTEGER PRIMARY KEY AUTOINCREMENT,
     redirect_source INTEGER NULL UNIQUE, redirect_destination INTEGER NULL UNIQUE,
     origin INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0,
     attributes INTEGER NOT NULL DEFAULT 0, score INTEGER NOT NULL DEFAULT 0);
+"""
+
+# Subset of the WhatsApp ChatStorage.sqlite Core Data model.
+CHATSTORAGE_DDL = """
+CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER,
+    ZSESSIONTYPE INTEGER, ZUNREADCOUNT INTEGER, ZLASTMESSAGEDATE TIMESTAMP,
+    ZCONTACTJID VARCHAR, ZPARTNERNAME VARCHAR, ZLASTMESSAGETEXT VARCHAR);
+CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER,
+    ZCHATSESSION INTEGER, ZISFROMME INTEGER, ZMESSAGESTATUS INTEGER, ZMESSAGETYPE INTEGER,
+    ZMESSAGEDATE TIMESTAMP, ZSENTDATE TIMESTAMP, ZFROMJID VARCHAR, ZTOJID VARCHAR,
+    ZSTANZAID VARCHAR, ZTEXT VARCHAR);
+CREATE TABLE ZWAPROFILEPUSHNAME (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, Z_OPT INTEGER,
+    ZJID VARCHAR, ZPUSHNAME VARCHAR);
 """
 
 AB_PHONE = 3
@@ -196,6 +213,23 @@ def safari_visit(visit_id: int, item_id: int, visit_time: float, title: str | No
             (visit_id, item_id, visit_time, title))
 
 
+def wa_session(pk: int, jid: str, partner: str | None, session_type: int = 0):
+    return ("INSERT INTO ZWACHATSESSION (Z_PK, ZCONTACTJID, ZPARTNERNAME, ZSESSIONTYPE) "
+            "VALUES (?, ?, ?, ?)", (pk, jid, partner, session_type))
+
+
+def wa_message(pk: int, session: int | None, from_me: int, date: float, text: str | None,
+               message_type: int = 0):
+    return ("INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZISFROMME, ZMESSAGEDATE, ZTEXT, "
+            "ZMESSAGETYPE) VALUES (?, ?, ?, ?, ?, ?)",
+            (pk, session, from_me, date, text, message_type))
+
+
+def wa_push(pk: int, jid: str, name: str | None):
+    return ("INSERT INTO ZWAPROFILEPUSHNAME (Z_PK, ZJID, ZPUSHNAME) VALUES (?, ?, ?)",
+            (pk, jid, name))
+
+
 def build_ios_tree(root: Path) -> list[Path]:
     """Write the sample iOS FFS tree under root; return every file written."""
     root = Path(root)
@@ -265,10 +299,25 @@ def build_ios_tree(root: Path) -> list[Path]:
         ],
     )
 
+    # ZMESSAGEDATE: Cocoa SECONDS (REAL).
+    group = "120363000000000002@g.us"
+    chatstorage = make_db(
+        root / CHATSTORAGE_PATH, CHATSTORAGE_DDL,
+        rows=[
+            wa_session(1, "15550100@s.whatsapp.net", "Ana"),
+            wa_session(2, group, "Locker crew", session_type=1),
+            wa_push(1, "15550100@s.whatsapp.net", "Ana Petrova"),
+            wa_message(1, 1, 0, day + 2400, "Did you get the key?"),
+            wa_message(2, 1, 1, day + 2460, PHASE12_FLAG),
+            wa_message(3, 2, 0, day + 2520, None, message_type=1),  # image, no caption
+        ],
+        wal_rows=[wa_message(4, 2, 1, day + 2580, "Moved it to locker 14")],
+    )
+
     readme = root / "readme.txt"
     readme.write_bytes(b"Treska synthetic iOS FFS fixture.\n")
-    written = [sms, knowledgec, addressbook, callhistory, safari, readme]
-    for db in (sms, callhistory):
+    written = [sms, knowledgec, addressbook, callhistory, safari, chatstorage, readme]
+    for db in (sms, callhistory, chatstorage):
         written += [Path(str(db) + s) for s in ("-wal", "-shm") if Path(str(db) + s).is_file()]
     return sorted(written)
 

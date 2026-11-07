@@ -304,6 +304,96 @@ def has_all_tables(path: Path, required: tuple[str, ...]) -> bool:
         conn.close()
 
 
+def has_any_table_set(path: Path, alternatives: tuple[tuple[str, ...], ...]) -> bool:
+    """True when the ORIGINAL db has every table of at least one alternative set
+    (Phase 12: msgstore.db modern OR legacy layout). Same immutable read-only open as
+    has_all_tables — no WAL replay. Never raises."""
+    try:
+        conn = open_readonly(Path(path))
+    except (sqlite3.Error, OSError):
+        return False
+    try:
+        schema = folded_schema(conn)
+        return any(all(has(schema, t) for t in tables) for tables in alternatives)
+    except (sqlite3.Error, OSError):
+        return False
+    finally:
+        conn.close()
+
+
+# --- Phase 12: WhatsApp (shared by android.py and ios.py) -------------------
+
+WA_USER_SUFFIX = "@s.whatsapp.net"
+WA_GROUP_SUFFIX = "@g.us"
+WHATSAPP_KIND = "whatsapp_msg"
+
+
+def strip_jid(jid: Any) -> str | None:
+    """WhatsApp JID -> contact. "@s.whatsapp.net" / "@g.us" are dropped; any other
+    suffix (@lid, @broadcast, ...) stays verbatim. None / blob -> None. TEXT_CAP."""
+    text = truncate(jid) if not isinstance(jid, str) else jid
+    if text is None:
+        return None
+    for suffix in (WA_USER_SUFFIX, WA_GROUP_SUFFIX):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    return text[:TEXT_CAP]
+
+
+def is_group_jid(jid: Any) -> bool:
+    """True when the JID is a WhatsApp group (ends in "@g.us")."""
+    return isinstance(jid, str) and jid.endswith(WA_GROUP_SUFFIX)
+
+
+def whatsapp_record(
+    *,
+    timestamp: str | None,
+    from_me: Any,
+    jid: Any,
+    contact_name: Any,
+    body: Any,
+    platform: str,
+) -> dict[str, Any]:
+    """One WhatsApp sample — the uniform 8-key record for Android and iOS.
+
+    timestamp is already ISO (the caller converts: the unit is fixed per platform).
+    from_me 1 -> "sent", 0 -> "received", anything else -> None. body NULL -> "";
+    a blob body is never decoded and also becomes "". TEXT_CAP on every text value.
+    """
+    flag = None if isinstance(from_me, (bytes, bytearray, memoryview)) else from_me
+    try:
+        flag = None if flag is None else int(flag)
+    except (TypeError, ValueError):
+        flag = None
+    return {
+        "kind": WHATSAPP_KIND,
+        "timestamp": timestamp,
+        "direction": "sent" if flag == 1 else "received" if flag == 0 else None,
+        "contact": strip_jid(jid),
+        "contact_name": truncate(contact_name),
+        "is_group": is_group_jid(jid),
+        "body": truncate(body) or "",
+        "platform": platform,
+    }
+
+
+def whatsapp_summary(schema_layout: str) -> dict[str, Any]:
+    """The 10-key WhatsApp summary skeleton, identical on both platforms."""
+    return {
+        "message_count": None,
+        "sent_count": None,
+        "received_count": None,
+        "media_only_count": None,
+        "chat_count": None,
+        "group_chat_count": None,
+        "first_message": None,
+        "last_message": None,
+        "contact_names_resolved": False,
+        "schema_layout": schema_layout,
+    }
+
+
 def triage_sqlite(
     path: Path,
     filename: str,
