@@ -1,4 +1,5 @@
-# Treska parsers — Android logical artifact triage: mmssms.db, contacts2.db, calllog.db.
+# Treska parsers — Android logical artifact triage: mmssms.db, contacts2.db, calllog.db,
+# Chrome History, WhatsApp msgstore.db.
 # © 2026 ShadowStrike. All rights reserved.
 # Aut Viam Inveniam Aut Faciam
 #
@@ -21,14 +22,19 @@ from treska.parsers.sqlite_triage import (
     count_table,
     epoch_to_iso,
     fetch_rows,
+    folded_schema,
     has,
     need_column,
+    open_evidence,
     ranked,
+    result_skeleton,
     safe_count,
     safe_scalar,
     triage_sqlite,
     truncate,
     warn,
+    whatsapp_record,
+    whatsapp_summary,
 )
 
 UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -408,6 +414,193 @@ def parse_android_chrome(path: Path, filename: str, work_dir: Path | None = None
                          work_dir, sample_cap=2 * SAMPLE_CAP)
 
 
+# --- Phase 12: WhatsApp msgstore.db (+ optional sibling wa.db) ---------------
+
+WHATSAPP_MODERN = ("message", "chat", "jid")
+WHATSAPP_LEGACY = ("messages",)
+# Either complete set claims msgstore.db (core.pipeline generic-name pre-check).
+WHATSAPP_ALTERNATIVES = (WHATSAPP_MODERN, WHATSAPP_LEGACY)
+WA_DB_NAME = "wa.db"          # sibling contact-name source — never dispatched itself
+WA_NAME_CAP = 50_000          # max wa_contacts rows read into the name map
+LEGACY_SYSTEM_JID = "-1"      # legacy messages.key_remote_jid placeholder row
+
+
+def _col(schema: Schema, triage: dict[str, Any], table: str, column: str, expr: str) -> str:
+    """expr when table.column exists, else "NULL" (with a missing-column warning)."""
+    return expr if need_column(schema, triage, table, column) else "NULL"
+
+
+def _drop_missing_table_warnings(triage: dict[str, Any], tables: tuple[str, ...]) -> None:
+    """triage_sqlite warns for every absent required table; the layout not in use
+    is not missing, so its warnings are removed."""
+    unused = {f"missing table {t}" for t in tables}
+    triage["warnings"][:] = [w for w in triage["warnings"] if w not in unused]
+
+
+def _wa_names(db_path: Path, work_dir: Path | None, triage: dict[str, Any]) -> dict[str, str]:
+    """{jid: display_name} from a wa.db sitting beside msgstore.db (casefolded name).
+
+    Opened through open_evidence (read-only; Phase 9 Option A WAL rule). Absent,
+    unreadable, or no wa_contacts -> warning + {} — msgstore.db never fails on wa.db.
+    """
+    try:
+        sibling = next((p for p in Path(db_path).parent.iterdir()
+                        if p.name.casefold() == WA_DB_NAME and p.is_file()), None)
+    except OSError:
+        sibling = None
+    if sibling is None:
+        warn(triage, "wa.db not found beside msgstore.db; contact names not resolved")
+        return {}
+    scratch = result_skeleton(sibling.name, "wa_db")
+    rows: list[tuple] = []
+    try:
+        with open_evidence(sibling, work_dir, scratch) as conn:
+            schema = folded_schema(conn)
+            if not (has(schema, "wa_contacts", "jid") and has(schema, "wa_contacts", "display_name")):
+                warn(triage, "wa.db has no wa_contacts(jid, display_name); contact names not resolved")
+                return {}
+            rows = conn.execute(
+                "SELECT jid, display_name FROM wa_contacts "
+                "WHERE jid IS NOT NULL AND display_name IS NOT NULL LIMIT ?", (WA_NAME_CAP,)
+            ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — wa.db must never fail msgstore.db
+        warn(triage, f"wa.db unreadable ({type(exc).__name__}: {exc}); contact names not resolved")
+        return {}
+    for message in scratch["warnings"]:
+        warn(triage, f"wa.db: {message}")
+    return {jid: name for jid, name in rows if isinstance(jid, str) and isinstance(name, str)}
+
+
+def _whatsapp_modern(conn, schema, triage, summary) -> list[tuple]:
+    """message JOIN chat JOIN jid. Returns sample rows (timestamp, from_me, jid, body)."""
+    msg = "message"
+    from_me = _col(schema, triage, msg, "from_me", "m.from_me")
+    ts = _col(schema, triage, msg, "timestamp", "m.timestamp")
+    text = _col(schema, triage, msg, "text_data", "m.text_data")
+    has_type = need_column(schema, triage, msg, "message_type")
+    join = all([
+        need_column(schema, triage, msg, "chat_row_id"),
+        need_column(schema, triage, "chat", "_id"),
+        need_column(schema, triage, "chat", "jid_row_id"),
+        need_column(schema, triage, "jid", "_id"),
+        need_column(schema, triage, "jid", "raw_string"),
+    ])
+
+    summary["message_count"] = count_table(conn, schema, msg)
+    summary["chat_count"] = count_table(conn, schema, "chat")
+    if from_me != "NULL":
+        summary["sent_count"] = safe_count(conn, "SELECT COUNT(*) FROM message WHERE from_me = 1")
+        summary["received_count"] = safe_count(conn, "SELECT COUNT(*) FROM message WHERE from_me = 0")
+    if text != "NULL":
+        if has_type:  # message_type 0 = text (unconfirmed — see CLAUDE.md)
+            summary["media_only_count"] = safe_count(
+                conn, "SELECT COUNT(*) FROM message WHERE text_data IS NULL AND message_type != 0")
+        else:
+            warn(triage, "media_only_count counts every NULL text_data (no message_type column)")
+            summary["media_only_count"] = safe_count(
+                conn, "SELECT COUNT(*) FROM message WHERE text_data IS NULL")
+    if join:
+        summary["group_chat_count"] = safe_count(
+            conn, "SELECT COUNT(*) FROM chat c JOIN jid j ON j._id = c.jid_row_id "
+                  "WHERE j.raw_string LIKE '%@g.us'")
+    if ts != "NULL":  # message.timestamp: Unix MILLISECONDS
+        summary["first_message"] = unix_ms_to_iso(
+            safe_scalar(conn, "SELECT MIN(timestamp) FROM message WHERE timestamp != 0"))
+        summary["last_message"] = unix_ms_to_iso(
+            safe_scalar(conn, "SELECT MAX(timestamp) FROM message WHERE timestamp != 0"))
+
+    sql = (
+        f"SELECT {ts}, {from_me}, " + ("j.raw_string" if join else "NULL") + f", {text}"
+        " FROM message m"
+        + (" LEFT JOIN chat c ON c._id = m.chat_row_id LEFT JOIN jid j ON j._id = c.jid_row_id"
+           if join else "")
+        + " ORDER BY " + ("m.timestamp DESC, " if ts != "NULL" else "") + "m.ROWID DESC LIMIT ?"
+    )
+    return fetch_rows(conn, triage, sql, (SAMPLE_CAP,))
+
+
+def _whatsapp_legacy(conn, schema, triage, summary) -> list[tuple]:
+    """Legacy `messages` table; key_remote_jid '-1' rows are system rows, skipped."""
+    tbl = "messages"
+    has_jid = need_column(schema, triage, tbl, "key_remote_jid")
+    from_me = _col(schema, triage, tbl, "key_from_me", "key_from_me")
+    ts = _col(schema, triage, tbl, "timestamp", "timestamp")
+    text = _col(schema, triage, tbl, "data", "data")
+    has_type = need_column(schema, triage, tbl, "media_wa_type")
+    where = "(key_remote_jid IS NULL OR key_remote_jid != ?)" if has_jid else "1"
+    params = (LEGACY_SYSTEM_JID,) if has_jid else ()
+
+    def count(extra: str) -> int | None:
+        return safe_count(conn, f"SELECT COUNT(*) FROM messages WHERE {where}{extra}", params)
+
+    summary["message_count"] = count("")
+    if from_me != "NULL":
+        summary["sent_count"] = count(" AND key_from_me = 1")
+        summary["received_count"] = count(" AND key_from_me = 0")
+    if text != "NULL":
+        if has_type:  # media_wa_type 0 = text (unconfirmed — see CLAUDE.md)
+            summary["media_only_count"] = count(" AND data IS NULL AND media_wa_type != 0")
+        else:
+            warn(triage, "media_only_count counts every NULL data (no media_wa_type column)")
+            summary["media_only_count"] = count(" AND data IS NULL")
+    if has_jid:
+        summary["chat_count"] = safe_count(
+            conn, "SELECT COUNT(DISTINCT key_remote_jid) FROM messages WHERE key_remote_jid != ?",
+            params)
+        summary["group_chat_count"] = safe_count(
+            conn, "SELECT COUNT(DISTINCT key_remote_jid) FROM messages "
+                  "WHERE key_remote_jid != ? AND key_remote_jid LIKE '%@g.us'", params)
+    if ts != "NULL":  # messages.timestamp: Unix MILLISECONDS
+        summary["first_message"] = unix_ms_to_iso(safe_scalar(
+            conn, f"SELECT MIN(timestamp) FROM messages WHERE {where} AND timestamp != 0", params))
+        summary["last_message"] = unix_ms_to_iso(safe_scalar(
+            conn, f"SELECT MAX(timestamp) FROM messages WHERE {where} AND timestamp != 0", params))
+
+    sql = (
+        f"SELECT {ts}, {from_me}, " + ("key_remote_jid" if has_jid else "NULL") + f", {text}"
+        f" FROM messages WHERE {where} ORDER BY "
+        + ("timestamp DESC, " if ts != "NULL" else "") + "ROWID DESC LIMIT ?"
+    )
+    return fetch_rows(conn, triage, sql, (*params, SAMPLE_CAP))
+
+
+def _whatsapp_body_for(path: Path, work_dir: Path | None):
+    def body(conn: sqlite3.Connection, schema: Schema, triage: dict[str, Any]):
+        modern = all(has(schema, t) for t in WHATSAPP_MODERN)
+        legacy = has(schema, "messages")
+        if modern or not legacy:
+            # Modern layout (or a partial one: its missing-table warnings stay).
+            _drop_missing_table_warnings(triage, WHATSAPP_LEGACY)
+            summary = whatsapp_summary("modern")
+            rows = _whatsapp_modern(conn, schema, triage, summary) if has(schema, "message") else []
+        else:
+            _drop_missing_table_warnings(triage, WHATSAPP_MODERN)
+            summary = whatsapp_summary("legacy")
+            rows = _whatsapp_legacy(conn, schema, triage, summary)
+
+        names = _wa_names(path, work_dir, triage)
+        summary["contact_names_resolved"] = bool(names)
+        samples = [
+            whatsapp_record(timestamp=unix_ms_to_iso(ts), from_me=from_me, jid=jid,
+                            contact_name=names.get(jid) if isinstance(jid, str) else None,
+                            body=text, platform="android")
+            for ts, from_me, jid, text in rows
+        ]
+        return summary, samples, summary["message_count"] or 0
+    return body
+
+
+def parse_android_whatsapp(path: Path, filename: str, work_dir: Path | None = None) -> dict:
+    """Triage WhatsApp msgstore.db. Required: the modern set (message, chat, jid) OR the
+    legacy messages table. Contact names from a sibling wa.db (wa_contacts), optional.
+    Summary: the 10-key WhatsApp summary (schema_layout "modern" / "legacy").
+    Samples: up to SAMPLE_CAP most-recent messages as whatsapp_record() 8-key records.
+    msgstore.db is a generic name: core.pipeline skips (None) a file with neither
+    complete table set before this parser is called."""
+    return triage_sqlite(path, filename, "android_whatsapp", (*WHATSAPP_MODERN, *WHATSAPP_LEGACY),
+                         _whatsapp_body_for(Path(path), work_dir), work_dir)
+
+
 # Keyed by casefolded filename → (triage.format, parser). Dispatched from
 # core.pipeline.triage_file only when extraction_type is ANDROID_LOGICAL and the
 # file carries the SQLite header.
@@ -416,4 +609,5 @@ ANDROID_ARTIFACTS: dict[str, tuple[str, Callable[..., dict]]] = {
     "contacts2.db": ("android_contacts", parse_android_contacts),
     "calllog.db": ("android_calllog", parse_android_calllog),
     "history": ("android_chrome", parse_android_chrome),  # generic name — see pipeline
+    "msgstore.db": ("android_whatsapp", parse_android_whatsapp),  # generic name — see pipeline
 }

@@ -6,7 +6,9 @@
 # (each with an uncheckpointed -wal/-shm sidecar; contacts2.db also carries the
 # older embedded `calls` table) and calllog.db, using the real AOSP table and
 # column names. Phase 11 adds Chrome History (no extension) with a planted
-# flag{ph11} in a page title and a keyword_search_terms row. Also imported by
+# flag{ph11} in a page title and a keyword_search_terms row. Phase 12 adds WhatsApp
+# com.whatsapp/databases/msgstore.db (modern layout, uncheckpointed -wal/-shm, a group
+# chat, a media-only row, flag{ph12} in one body) and a sibling wa.db. Also imported by
 # tests/test_phase10_android.py and tests/test_phase11.py for its DDL and builders. make_db / zip_tree come from make_ios_fixture — one implementation.
 
 from __future__ import annotations
@@ -32,6 +34,41 @@ CALLLOG_PATH = DB_DIR.format("contacts") + "/calllog.db"
 CHROME_PATH = "data/data/com.android.chrome/app_chrome/Default/History"
 WEBKIT_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 PLANTED_FLAG = "flag{ph11}"
+WHATSAPP_DIR = "data/data/com.whatsapp/databases"
+MSGSTORE_PATH = WHATSAPP_DIR + "/msgstore.db"
+WA_DB_PATH = WHATSAPP_DIR + "/wa.db"
+PHASE12_FLAG = "flag{ph12}"
+
+# Subset of the modern (2021+) WhatsApp msgstore.db schema.
+MSGSTORE_MODERN_DDL = """
+CREATE TABLE jid (_id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, server TEXT NOT NULL,
+    agent INTEGER, device INTEGER, type INTEGER, raw_string TEXT);
+CREATE TABLE chat (_id INTEGER PRIMARY KEY AUTOINCREMENT, jid_row_id INTEGER UNIQUE,
+    hidden INTEGER, subject TEXT, created_timestamp INTEGER, archived INTEGER,
+    sort_timestamp INTEGER);
+CREATE TABLE message (_id INTEGER PRIMARY KEY AUTOINCREMENT, chat_row_id INTEGER NOT NULL,
+    from_me INTEGER NOT NULL, key_id TEXT NOT NULL, sender_jid_row_id INTEGER,
+    status INTEGER, broadcast INTEGER, recipient_count INTEGER, participant_hash TEXT,
+    origination_flags INTEGER, origin INTEGER, timestamp INTEGER, received_timestamp INTEGER,
+    receipt_server_timestamp INTEGER, message_type INTEGER, text_data TEXT, starred INTEGER,
+    lookup_tables INTEGER, sort_id INTEGER NOT NULL DEFAULT 0);
+"""
+
+# Legacy (pre-2021) msgstore.db `messages` table.
+MSGSTORE_LEGACY_DDL = """
+CREATE TABLE messages (_id INTEGER PRIMARY KEY AUTOINCREMENT, key_remote_jid TEXT NOT NULL,
+    key_from_me INTEGER, key_id TEXT NOT NULL, status INTEGER, needs_push INTEGER, data TEXT,
+    timestamp INTEGER, media_url TEXT, media_mime_type TEXT, media_wa_type TEXT,
+    media_size INTEGER, media_name TEXT, latitude REAL, longitude REAL, remote_resource TEXT,
+    received_timestamp INTEGER, send_timestamp INTEGER, receipt_server_timestamp INTEGER);
+"""
+
+# Subset of wa.db.
+WA_DB_DDL = """
+CREATE TABLE wa_contacts (_id INTEGER PRIMARY KEY AUTOINCREMENT, jid TEXT NOT NULL,
+    is_whatsapp_user BOOLEAN NOT NULL, status TEXT, number TEXT, raw_contact_id INTEGER,
+    display_name TEXT, given_name TEXT, family_name TEXT, wa_name TEXT);
+"""
 
 # Subset of the Chromium History schema (history_database / url_database).
 CHROME_DDL = """
@@ -187,6 +224,39 @@ def chrome_search(url_id: int, term: str, keyword_id: int = 2):
     )
 
 
+def wa_jid(rowid: int, raw: str):
+    user, server = raw.split("@", 1)
+    return ("INSERT INTO jid (_id, user, server, raw_string) VALUES (?, ?, ?, ?)",
+            (rowid, user, server, raw))
+
+
+def wa_chat(rowid: int, jid_row: int, subject: str | None = None):
+    return ("INSERT INTO chat (_id, jid_row_id, subject) VALUES (?, ?, ?)", (rowid, jid_row, subject))
+
+
+def wa_message(rowid: int, chat_row: int, from_me: int, ts_ms: int, text: str | None,
+               message_type: int = 0):
+    return (
+        "INSERT INTO message (_id, chat_row_id, from_me, key_id, timestamp, message_type, "
+        "text_data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (rowid, chat_row, from_me, f"KEY{rowid}", ts_ms, message_type, text),
+    )
+
+
+def wa_legacy(rowid: int, jid: str, from_me: int, ts_ms: int, data: str | None,
+              media_wa_type: str = "0"):
+    return (
+        "INSERT INTO messages (_id, key_remote_jid, key_from_me, key_id, data, timestamp, "
+        "media_wa_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (rowid, jid, from_me, f"KEY{rowid}", data, ts_ms, media_wa_type),
+    )
+
+
+def wa_contact(rowid: int, jid: str, display_name: str | None):
+    return ("INSERT INTO wa_contacts (_id, jid, is_whatsapp_user, display_name) VALUES (?, ?, 1, ?)",
+            (rowid, jid, display_name))
+
+
 def build_android_tree(root: Path) -> list[Path]:
     """Write the sample Android logical tree under root; return every file written."""
     root = Path(root)
@@ -257,10 +327,28 @@ def build_android_tree(root: Path) -> list[Path]:
         ],
     )
 
+    group = "120363000000000001@g.us"
+    msgstore = make_db(
+        root / MSGSTORE_PATH, MSGSTORE_MODERN_DDL,
+        rows=[
+            wa_jid(1, "15550100@s.whatsapp.net"), wa_jid(2, group),
+            wa_chat(1, 1), wa_chat(2, 2, "Locker crew"),
+            wa_message(1, 1, 0, unix_ms(at(40)), "Did you get the key?"),
+            wa_message(2, 1, 1, unix_ms(at(41)), PHASE12_FLAG),
+            wa_message(3, 2, 0, unix_ms(at(42)), None, message_type=1),  # image, no caption
+        ],
+        wal_rows=[wa_message(4, 2, 1, unix_ms(at(43)), "Moved it to locker 14")],
+    )
+    wa_db = make_db(
+        root / WA_DB_PATH, WA_DB_DDL,
+        rows=[wa_contact(1, "15550100@s.whatsapp.net", "Ana Petrova"),
+              wa_contact(2, group, "Locker crew")],
+    )
+
     readme = root / "readme.txt"
     readme.write_bytes(b"Treska synthetic Android logical fixture.\n")
-    written = [mmssms, contacts, calllog, chrome, readme]
-    for db in (mmssms, contacts):
+    written = [mmssms, contacts, calllog, chrome, msgstore, wa_db, readme]
+    for db in (mmssms, contacts, msgstore):
         written += [Path(str(db) + s) for s in ("-wal", "-shm") if Path(str(db) + s).is_file()]
     return sorted(written)
 

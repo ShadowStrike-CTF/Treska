@@ -279,6 +279,43 @@ CONTRACT["1.5.0"] = {
     },
 }
 
+# 1.6.0 (Phase 12): additive — everything in 1.5.0 unchanged, plus two WhatsApp formats.
+# Both share one 10-key summary and one 8-key sample record (whatsapp_record).
+_WHATSAPP = {
+    "triage": _SQLITE_TRIAGE,
+    "summary": {
+        "message_count": int | None,
+        "sent_count": int | None,
+        "received_count": int | None,
+        "media_only_count": int | None,
+        "chat_count": int | None,
+        "group_chat_count": int | None,
+        "first_message": str | None,
+        "last_message": str | None,
+        "contact_names_resolved": bool,
+        "schema_layout": str,
+    },
+    "sample": {
+        "kind": str,
+        "timestamp": str | None,
+        "direction": str | None,
+        "contact": str | None,
+        "contact_name": str | None,
+        "is_group": bool,
+        "body": str,
+        "platform": str,
+    },
+    "items": {},
+}
+CONTRACT["1.6.0"] = {
+    **{key: dict(shape) for key, shape in CONTRACT["1.5.0"].items()},
+    "triage": {
+        **CONTRACT["1.5.0"]["triage"],
+        "android_whatsapp": _WHATSAPP,
+        "ios_whatsapp": _WHATSAPP,
+    },
+}
+
 
 def _allowed(spec: object) -> tuple[type, ...]:
     # `T | None` -> (T, NoneType); a bare type -> (T,).
@@ -479,16 +516,20 @@ def test_contract_1_5_0():
              (ANDROID_ZIP, "ANDROID_LOGICAL", ANDROID_FORMATS | PHASE11_ANDROID))
     for zip_path, extraction, formats in cases:
         for data in (_cli_json(zip_path), _web_json(zip_path)):
-            assert data["schema_version"] == "1.5.0"
+            assert data["schema_version"] == SCHEMA_VERSION
             assert data["extraction_type"] == extraction
+            # 1.6.0 is additive: output still matches the unchanged 1.5.0 shapes.
+            _check_contract(data, version="1.5.0", expect_formats=formats)
             _check_contract(data, expect_formats=formats)
+            # Only the 1.5.0 formats: the fixtures gained Phase 12 artifacts since.
             statuses = {e["triage"]["format"]: e["triage"]["status"]
-                        for e in data["inventory"] if e["triage"] is not None}
+                        for e in data["inventory"]
+                        if e["triage"] is not None and e["triage"]["format"] in formats}
             assert statuses == dict.fromkeys(formats, "parsed")
             assert isinstance(data["flag_hits"], list)
 
     android = _web_json(ANDROID_ZIP)
-    assert [h["match"] for h in android["flag_hits"]] == ["flag{ph11}"]
+    assert "flag{ph11}" in [h["match"] for h in android["flag_hits"]]
     flags = _cli_json(FLAG_ZIP)
     _check_contract(flags)
     assert [(h["encoding"], h["match"]) for h in flags["flag_hits"]] == [
@@ -497,3 +538,39 @@ def test_contract_1_5_0():
     skipped = _cli_json(ANDROID_ZIP, "--no-flag-scan")
     assert "flag_hits" in skipped and skipped["flag_hits"] is None
     _check_contract(skipped, expect_formats=ANDROID_FORMATS | PHASE11_ANDROID)
+
+
+WHATSAPP_FORMATS = {"IOS_FFS": "ios_whatsapp", "ANDROID_LOGICAL": "android_whatsapp"}
+
+
+def test_contract_1_6_0():
+    """Phase 12: CLI and web output match CONTRACT["1.6.0"] — both WhatsApp formats
+    (triage, 10-key summary, 8-key sample), every 1.5.0 shape carried over unchanged,
+    flag{ph12} found on both platforms, and flag_hits null under --no-flag-scan."""
+    assert {"1.2.0", "1.3.0", "1.4.0", "1.5.0", "1.6.0"} <= set(CONTRACT)
+    for key, shape in CONTRACT["1.5.0"].items():
+        if key != "triage":
+            assert CONTRACT["1.6.0"][key] == shape
+    for fmt, shape in CONTRACT["1.5.0"]["triage"].items():
+        assert CONTRACT["1.6.0"]["triage"][fmt] is shape
+
+    cases = ((IOS_ZIP, "IOS_FFS", IOS_FORMATS | PHASE11_IOS),
+             (ANDROID_ZIP, "ANDROID_LOGICAL", ANDROID_FORMATS | PHASE11_ANDROID))
+    for zip_path, extraction, older in cases:
+        wa = WHATSAPP_FORMATS[extraction]
+        formats = older | {wa}
+        for data in (_cli_json(zip_path), _web_json(zip_path)):
+            assert data["schema_version"] == "1.6.0"
+            assert data["extraction_type"] == extraction
+            _check_contract(data, expect_formats=formats)
+            statuses = {e["triage"]["format"]: e["triage"]["status"]
+                        for e in data["inventory"] if e["triage"] is not None}
+            assert statuses == dict.fromkeys(formats, "parsed")
+            triage = next(e["triage"] for e in data["inventory"]
+                          if e["triage"] is not None and e["triage"]["format"] == wa)
+            assert triage["wal_applied"] is True and triage["samples"]
+            assert "flag{ph12}" in [h["match"] for h in data["flag_hits"]]
+
+    skipped = _cli_json(ANDROID_ZIP, "--no-flag-scan")
+    assert skipped["flag_hits"] is None
+    _check_contract(skipped, expect_formats=ANDROID_FORMATS | PHASE11_ANDROID | {"android_whatsapp"})

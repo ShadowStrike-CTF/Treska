@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 # 1.4.0: new FileEntry.triage formats android_mmssms / android_contacts / android_calllog (additive).
 # 1.5.0: new FileEntry.triage formats ios_callhistory / ios_safari / android_chrome and
 #        ParseResult.flag_hits (additive).
-SCHEMA_VERSION = "1.5.0"
+# 1.6.0: new FileEntry.triage formats android_whatsapp / ios_whatsapp (additive).
+SCHEMA_VERSION = "1.6.0"
 
 
 @dataclass

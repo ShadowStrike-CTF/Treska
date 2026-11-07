@@ -1,4 +1,5 @@
-# Treska parsers — iOS FFS artifact triage: sms.db, KnowledgeC.db, AddressBook.sqlitedb.
+# Treska parsers — iOS FFS artifact triage: sms.db, KnowledgeC.db, AddressBook.sqlitedb,
+# CallHistory.storedata, Safari History.db, WhatsApp ChatStorage.sqlite.
 # © 2026 ShadowStrike. All rights reserved.
 # Aut Viam Inveniam Aut Faciam
 
@@ -27,6 +28,8 @@ from treska.parsers.sqlite_triage import (
     triage_sqlite,
     truncate,
     warn,
+    whatsapp_record,
+    whatsapp_summary,
 )
 
 COCOA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
@@ -421,6 +424,103 @@ def parse_ios_safari(path: Path, filename: str, work_dir: Path | None = None) ->
     return triage_sqlite(path, filename, "ios_safari", SAFARI_REQUIRED, _safari_body, work_dir)
 
 
+# --- Phase 12: WhatsApp ChatStorage.sqlite (Core Data) -------------------------
+
+WHATSAPP_IOS_REQUIRED = ("ZWAMESSAGE", "ZWACHATSESSION")
+PUSH_TABLE = "ZWAPROFILEPUSHNAME"
+
+
+def _whatsapp_ios_body(conn: sqlite3.Connection, schema: Schema, triage: dict[str, Any]):
+    summary = whatsapp_summary("coredata")
+    if not has(schema, "ZWAMESSAGE"):
+        return summary, [], 0
+
+    def col(table: str, column: str, expr: str) -> str:
+        return expr if need_column(schema, triage, table, column) else "NULL"
+
+    from_me = col("ZWAMESSAGE", "ZISFROMME", "m.ZISFROMME")
+    date = col("ZWAMESSAGE", "ZMESSAGEDATE", "m.ZMESSAGEDATE")
+    text = col("ZWAMESSAGE", "ZTEXT", "m.ZTEXT")
+    has_type = need_column(schema, triage, "ZWAMESSAGE", "ZMESSAGETYPE")
+    sessions = has(schema, "ZWACHATSESSION")
+    join = sessions and all([
+        need_column(schema, triage, "ZWAMESSAGE", "ZCHATSESSION"),
+        need_column(schema, triage, "ZWACHATSESSION", "Z_PK"),
+    ])
+    has_jid = join and need_column(schema, triage, "ZWACHATSESSION", "ZCONTACTJID")
+    has_partner = join and need_column(schema, triage, "ZWACHATSESSION", "ZPARTNERNAME")
+    push = has(schema, PUSH_TABLE) and has(schema, PUSH_TABLE, "ZJID") and has(schema, PUSH_TABLE, "ZPUSHNAME")
+    if not push:
+        warn(triage, f"no usable {PUSH_TABLE}(ZJID, ZPUSHNAME); contact names fall back to "
+                     "ZWACHATSESSION.ZPARTNERNAME")
+
+    summary["message_count"] = count_table(conn, schema, "ZWAMESSAGE")
+    summary["chat_count"] = count_table(conn, schema, "ZWACHATSESSION")
+    if from_me != "NULL":
+        summary["sent_count"] = safe_count(conn, "SELECT COUNT(*) FROM ZWAMESSAGE WHERE ZISFROMME = 1")
+        summary["received_count"] = safe_count(conn, "SELECT COUNT(*) FROM ZWAMESSAGE WHERE ZISFROMME = 0")
+    if text != "NULL":
+        if has_type:  # ZMESSAGETYPE 0 = text (unconfirmed — see CLAUDE.md)
+            summary["media_only_count"] = safe_count(
+                conn, "SELECT COUNT(*) FROM ZWAMESSAGE WHERE ZTEXT IS NULL AND ZMESSAGETYPE != 0")
+        else:
+            warn(triage, "media_only_count counts every NULL ZTEXT (no ZMESSAGETYPE column)")
+            summary["media_only_count"] = safe_count(
+                conn, "SELECT COUNT(*) FROM ZWAMESSAGE WHERE ZTEXT IS NULL")
+    if has_jid:
+        summary["group_chat_count"] = safe_count(
+            conn, "SELECT COUNT(*) FROM ZWACHATSESSION WHERE ZCONTACTJID LIKE '%@g.us'")
+    if date != "NULL":  # ZMESSAGEDATE: Cocoa SECONDS
+        summary["first_message"] = cocoa_s_to_iso(safe_scalar(
+            conn, "SELECT MIN(ZMESSAGEDATE) FROM ZWAMESSAGE WHERE ZMESSAGEDATE != 0"))
+        summary["last_message"] = cocoa_s_to_iso(safe_scalar(
+            conn, "SELECT MAX(ZMESSAGEDATE) FROM ZWAMESSAGE WHERE ZMESSAGEDATE != 0"))
+    if join:
+        orphans = safe_count(
+            conn, "SELECT COUNT(*) FROM ZWAMESSAGE m WHERE m.ZCHATSESSION IS NOT NULL AND NOT EXISTS "
+                  "(SELECT 1 FROM ZWACHATSESSION s WHERE s.Z_PK = m.ZCHATSESSION)")
+        if orphans:
+            warn(triage, f"{orphans} messages reference a missing chat session")
+
+    resolved = 0
+    if push and has_jid:
+        resolved += safe_count(conn, f"SELECT COUNT(*) FROM {PUSH_TABLE} WHERE ZPUSHNAME IS NOT NULL "
+                                     "AND ZPUSHNAME != ''") or 0
+    if has_partner:
+        resolved += safe_count(conn, "SELECT COUNT(*) FROM ZWACHATSESSION WHERE ZPARTNERNAME IS NOT NULL "
+                                     "AND ZPARTNERNAME != ''") or 0
+    summary["contact_names_resolved"] = resolved > 0
+
+    # Scalar subquery, not a JOIN: duplicate push-name rows must not multiply messages.
+    push_name = (f"(SELECT p.ZPUSHNAME FROM {PUSH_TABLE} p WHERE p.ZJID = s.ZCONTACTJID LIMIT 1)"
+                 if push and has_jid else "NULL")
+    partner = "s.ZPARTNERNAME" if has_partner else "NULL"
+    sql = (
+        f"SELECT {date}, {from_me}, " + ("s.ZCONTACTJID" if has_jid else "NULL")
+        + f", COALESCE({push_name}, {partner}), {text} FROM ZWAMESSAGE m"
+        + (" LEFT JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION" if join else "")
+        + " ORDER BY " + ("m.ZMESSAGEDATE DESC, " if date != "NULL" else "") + "m.ROWID DESC LIMIT ?"
+    )
+    samples = [
+        whatsapp_record(timestamp=cocoa_s_to_iso(ts), from_me=fm, jid=jid,
+                        contact_name=name, body=body, platform="ios")
+        for ts, fm, jid, name, body in fetch_rows(conn, triage, sql, (SAMPLE_CAP,))
+    ]
+    return summary, samples, summary["message_count"] or 0
+
+
+def parse_ios_whatsapp(path: Path, filename: str, work_dir: Path | None = None) -> dict:
+    """Triage WhatsApp ChatStorage.sqlite. Required tables: ZWAMESSAGE, ZWACHATSESSION
+    (ZWAPROFILEPUSHNAME optional — names fall back to ZWACHATSESSION.ZPARTNERNAME).
+    LEFT JOINs: a message whose chat session is gone is kept (contact null, warning).
+    Summary: the 10-key WhatsApp summary (schema_layout "coredata"); first/last from
+    ZMESSAGEDATE, Cocoa seconds. Samples: up to SAMPLE_CAP most-recent messages as
+    whatsapp_record() 8-key records. ChatStorage.sqlite is a generic name: core.pipeline
+    skips (None) a file missing either required table before this parser is called."""
+    return triage_sqlite(path, filename, "ios_whatsapp", WHATSAPP_IOS_REQUIRED,
+                         _whatsapp_ios_body, work_dir)
+
+
 # Keyed by casefolded filename → (triage.format, parser). Dispatched from
 # core.pipeline.triage_file only when extraction_type is IOS_FFS and the file
 # carries the SQLite header.
@@ -430,4 +530,5 @@ IOS_ARTIFACTS: dict[str, tuple[str, Callable[..., dict]]] = {
     "addressbook.sqlitedb": ("ios_addressbook", parse_ios_addressbook),
     "callhistory.storedata": ("ios_callhistory", parse_ios_callhistory),
     "history.db": ("ios_safari", parse_ios_safari),  # generic name — see pipeline
+    "chatstorage.sqlite": ("ios_whatsapp", parse_ios_whatsapp),  # generic name — see pipeline
 }
