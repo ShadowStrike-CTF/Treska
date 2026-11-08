@@ -206,3 +206,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Internal working docs -- never commit to repo
+*_Design_Doc_*.md
+*_SPEC_*.md
+*_Handoff_*.md
+*_SessionLog_*.md
+*_ToDo_*.html
+docs/
