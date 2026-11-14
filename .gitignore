@@ -214,3 +214,6 @@ __marimo__/
 *_SessionLog_*.md
 *_ToDo_*.html
 docs/
+# Local guide and agent files -- not part of the repo
+TEMPLATE_GUIDE.md
+CLAUDE.local.md
