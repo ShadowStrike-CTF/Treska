@@ -528,11 +528,16 @@ def test_contract_1_5_0():
             assert statuses == dict.fromkeys(formats, "parsed")
             assert isinstance(data["flag_hits"], list)
 
+    # Flag text is hidden by default (web always); --reveal-flags shows it.
     android = _web_json(ANDROID_ZIP)
-    assert "flag{ph11}" in [h["match"] for h in android["flag_hits"]]
+    assert android["flag_hits"] and {h["match"] for h in android["flag_hits"]} == {"flag{...}"}
+    assert "flag{ph11}" in [h["match"] for h in _cli_json(ANDROID_ZIP, "--reveal-flags")["flag_hits"]]
     flags = _cli_json(FLAG_ZIP)
     _check_contract(flags)
-    assert [(h["encoding"], h["match"]) for h in flags["flag_hits"]] == [
+    assert [(h["encoding"], h["match"]) for h in flags["flag_hits"]] == [("base64", "flag{...}")]
+    revealed = _cli_json(FLAG_ZIP, "--reveal-flags")
+    _check_contract(revealed)
+    assert [(h["encoding"], h["match"]) for h in revealed["flag_hits"]] == [
         ("base64", "flag{b64_wrapped_ph11}")]
 
     skipped = _cli_json(ANDROID_ZIP, "--no-flag-scan")
@@ -569,7 +574,10 @@ def test_contract_1_6_0():
             triage = next(e["triage"] for e in data["inventory"]
                           if e["triage"] is not None and e["triage"]["format"] == wa)
             assert triage["wal_applied"] is True and triage["samples"]
-            assert "flag{ph12}" in [h["match"] for h in data["flag_hits"]]
+            assert data["flag_hits"] and {h["match"] for h in data["flag_hits"]} == {"flag{...}"}
+        revealed = _cli_json(zip_path, "--reveal-flags")
+        _check_contract(revealed, expect_formats=formats)
+        assert "flag{ph12}" in [h["match"] for h in revealed["flag_hits"]]
 
     skipped = _cli_json(ANDROID_ZIP, "--no-flag-scan")
     assert skipped["flag_hits"] is None

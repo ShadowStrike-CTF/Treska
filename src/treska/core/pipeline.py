@@ -146,12 +146,30 @@ def triage_file(
     return None
 
 
+# Constant placeholder for the flag body: it never reveals the flag's length.
+FLAG_MASK = "..."
+
+
+def mask_flag_hits(hits: list[dict] | None) -> list[dict] | None:
+    """Copies of hits with match reduced to "<prefix>...}". Fails closed: a match
+    that starts with no known prefix becomes the bare placeholder. None stays None."""
+    if hits is None:
+        return None
+    masked = []
+    for hit in hits:
+        match = hit["match"]
+        prefix = next((p for p in flag_scan.FLAG_PREFIXES if match.startswith(p)), None)
+        masked.append({**hit, "match": FLAG_MASK if prefix is None else prefix + FLAG_MASK + "}"})
+    return masked
+
+
 def parse_zip(
     zip_path: Path,
     keep: bool = False,
     no_hash: bool = False,
     on_extract: Callable[[Path], None] | None = None,
     no_flag_scan: bool = False,
+    reveal_flags: bool = False,
 ) -> ParseResult:
     """Extract, identify, hash and flag every file in zip_path.
 
@@ -163,6 +181,8 @@ def parse_zip(
     learns where the files are) — the ParseResult schema stays unchanged.
     The flag scan reads the extracted originals after hashing and before the
     triage loop, so before any WAL copy exists; no_flag_scan=True -> flag_hits None.
+    Flag hit text is masked (mask_flag_hits) unless reveal_flags=True; path, offset,
+    encoding and the hit count are the same either way.
     Raises ValueError for a missing or invalid zip.
     """
     zip_path = Path(zip_path)
@@ -178,6 +198,8 @@ def parse_zip(
         hashes = compute_hashes(files, skip=no_hash)
         # Originals only: runs before the triage loop stages any .treska_wal copy.
         flag_hits = flag_scan.scan_zip(files, root=temp_dir, skip=no_flag_scan)
+        if not reveal_flags:
+            flag_hits = mask_flag_hits(flag_hits)
         entries = []
         for file_path, row in zip(files, rows):
             magic_result = check_magic(file_path)

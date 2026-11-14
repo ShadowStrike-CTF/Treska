@@ -63,6 +63,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the CTF flag scan (flag_hits stays present: null in JSON)",
     )
+    parser.add_argument(
+        "--reveal-flags",
+        action="store_true",
+        help="Show the decoded flag text in output (hidden by default)",
+    )
     return parser
 
 
@@ -83,7 +88,7 @@ def main() -> None:
     # Parse first: a parse error must never create or truncate the --out file.
     try:
         result = parse_zip(path, keep=args.keep, no_hash=args.no_hash, on_extract=on_extract,
-                           no_flag_scan=args.no_flag_scan)
+                           no_flag_scan=args.no_flag_scan, reveal_flags=args.reveal_flags)
     except Exception as exc:  # noqa: BLE001
         print(f"treska: parse error: {exc}", file=sys.stderr)
         sys.exit(EXIT_PARSE_ERROR)
@@ -91,7 +96,8 @@ def main() -> None:
     if args.out:
         final = Path(args.out).resolve()
         try:
-            _write_out(result, final, as_json=args.json, verbose=args.verbose)
+            _write_out(result, final, as_json=args.json, verbose=args.verbose,
+                       reveal_flags=args.reveal_flags)
         except OSError as exc:
             print(f"treska: cannot write output: {final}: {exc.strerror or exc}", file=sys.stderr)
             sys.exit(EXIT_CANNOT_WRITE)
@@ -101,7 +107,8 @@ def main() -> None:
         # Plain write, not rich: JSON must reach Sarissa byte-for-byte.
         sys.stdout.write(_render_json(result))
     else:
-        _pretty_print(result, Console(highlight=False), verbose=args.verbose)
+        _pretty_print(result, Console(highlight=False), verbose=args.verbose,
+                      reveal_flags=args.reveal_flags)
 
 
 def _render_json(result: ParseResult) -> str:
@@ -109,7 +116,8 @@ def _render_json(result: ParseResult) -> str:
     return json.dumps(_to_dict(result), indent=2, default=str) + "\n"
 
 
-def _write_out(result: ParseResult, final: Path, *, as_json: bool, verbose: bool) -> None:
+def _write_out(result: ParseResult, final: Path, *, as_json: bool, verbose: bool,
+               reveal_flags: bool = False) -> None:
     """Write to <final>.partial beside it, then os.replace onto final: a crash
     mid-write never leaves a half-written file at the final path."""
     partial = final.with_name(final.name + ".partial")
@@ -123,7 +131,7 @@ def _write_out(result: ParseResult, final: Path, *, as_json: bool, verbose: bool
                     file=fh, force_terminal=False, color_system=None,
                     width=OUT_WIDTH, highlight=False,
                 )
-                _pretty_print(result, console, verbose=verbose)
+                _pretty_print(result, console, verbose=verbose, reveal_flags=reveal_flags)
         os.replace(partial, final)
     finally:
         partial.unlink(missing_ok=True)
@@ -138,7 +146,8 @@ def _or_dash(value: object) -> str:
     return _DASH if value is None else str(value)
 
 
-def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = False) -> None:
+def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = False,
+                  reveal_flags: bool = False) -> None:
     """Rich summary: counts, flag candidates, flagged files, SQLite schemas, EVTX
     triage, iOS and Android artifact triage, deferred containers; verbose adds full inventory. The caller picks the Console
     (terminal or --out file) so there is exactly one renderer."""
@@ -161,7 +170,7 @@ def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = Fals
            else f"{len(result.flag_hits)} flag hits")
     )
 
-    _print_flag_hits(console, result.flag_hits)
+    _print_flag_hits(console, result.flag_hits, reveal_flags=reveal_flags)
 
     if result.flagged:
         table = Table(title="Flagged files", title_justify="left")
@@ -204,7 +213,11 @@ def _pretty_print(result: ParseResult, console: Console, *, verbose: bool = Fals
         _print_inventory(console, result.inventory)
 
 
-def _print_flag_hits(console: Console, flag_hits: list[dict] | None) -> None:
+FLAG_HINT = "Flag text hidden. Re-run with --reveal-flags to show it."
+
+
+def _print_flag_hits(console: Console, flag_hits: list[dict] | None, *,
+                     reveal_flags: bool = False) -> None:
     """Flag candidates first — the matches are CTF-controlled bytes: Text(), never markup."""
     if not flag_hits:
         return
@@ -213,6 +226,8 @@ def _print_flag_hits(console: Console, flag_hits: list[dict] | None) -> None:
         line = Text(f"  {hit['match']}", style="bold")
         line.append(f"  {hit['path']} @ {hit['offset']} [{hit['encoding']}]")
         console.print(line)
+    if not reveal_flags:
+        console.print(Text(FLAG_HINT, style="dim"))
 
 
 def _print_evtx(console: Console, triage: dict) -> None:
