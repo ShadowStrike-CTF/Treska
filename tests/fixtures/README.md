@@ -24,7 +24,7 @@ python tests/fixtures/make_ios_fixture.py
 python tests/fixtures/make_flag_fixture.py
 ```
 
-Test data. All fixtures are synthetic. Phone numbers use the reserved range 555-0100 to 555-0199; email addresses use example.org; URLs use example domains. Listed exceptions: WhatsApp-style identifiers such as 15550100@s.whatsapp.net; placeholder group identifiers 120363000000000001@g.us and 120363000000000002@g.us; and one google.com search URL in the Android fixture's browser history.
+Test data. All fixtures are synthetic. Phone numbers use the reserved range 555-0100 to 555-0199; email addresses use example.org; URLs use example domains. Listed exceptions: WhatsApp-style identifiers such as `15550100@s.whatsapp.net`; placeholder group identifiers `120363000000000001@g.us` and `120363000000000002@g.us`; and one google.com search URL in the Android fixture's browser history.
 
 ---
 
