@@ -359,7 +359,8 @@ def test_flag_scan_total_cap(tmp_path):
 
 def test_no_flag_scan_gives_null(tmp_path):
     zip_path = _zip(tmp_path, {"notes.txt": b"flag{hidden}"})
-    assert [h["match"] for h in parse_zip(zip_path).flag_hits] == ["flag{hidden}"]
+    assert [h["match"] for h in parse_zip(zip_path).flag_hits] == ["flag{...}"]
+    assert [h["match"] for h in parse_zip(zip_path, reveal_flags=True).flag_hits] == ["flag{hidden}"]
     assert parse_zip(zip_path, no_flag_scan=True).flag_hits is None
     assert flag_scan.scan_zip([tmp_path / "anything"], skip=True) is None
 

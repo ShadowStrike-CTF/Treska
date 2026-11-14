@@ -306,7 +306,8 @@ def _android_case(root: Path, rows, wal_rows=None) -> list[Path]:
 
 def test_flag_in_whatsapp_body(tmp_path):
     zip_path = _zip_tree(tmp_path, lambda r: _android_case(r, _modern_rows(text_2="flag{wa_body}")))
-    result = parse_zip(zip_path)
+    assert (android_fx.MSGSTORE_PATH, "flag{...}") in _hits(parse_zip(zip_path))
+    result = parse_zip(zip_path, reveal_flags=True)
     assert (android_fx.MSGSTORE_PATH, "flag{wa_body}") in _hits(result)
     triage = next(e.triage for e in result.inventory if e.path == android_fx.MSGSTORE_PATH)
     assert triage["format"] == "android_whatsapp"
@@ -316,7 +317,8 @@ def test_flag_in_whatsapp_body(tmp_path):
 def test_flag_only_in_wal(tmp_path):
     wal_rows = [android_fx.wa_message(3, 1, 1, ms(T2) + 1000, "flag{wal_only}")]
     zip_path = _zip_tree(tmp_path, lambda r: _android_case(r, _modern_rows(), wal_rows))
-    hits = _hits(parse_zip(zip_path))
+    assert (android_fx.MSGSTORE_PATH + "-wal", "flag{...}") in _hits(parse_zip(zip_path))
+    hits = _hits(parse_zip(zip_path, reveal_flags=True))
     assert (android_fx.MSGSTORE_PATH + "-wal", "flag{wal_only}") in hits
     assert (android_fx.MSGSTORE_PATH, "flag{wal_only}") not in hits  # uncheckpointed
 
